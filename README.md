@@ -151,4 +151,5 @@ couples your race-free local claim to some other system's latency.
 
 ## License
 
-TBD.
+[Apache License 2.0](LICENSE). Copyright 2026 Luis Alberto Amigo Navarro. See also
+[NOTICE](NOTICE).

@@ -7,17 +7,24 @@ and is checked off here with a pointer.
 Legend: `[ ]` open · `[~]` in discussion · `[x]` resolved (→ ADR)
 
 ## A. Data model & state machine
-- [ ] **Q1** How is the pipeline represented — a data-driven `transitions` table the DB
-  reads, or transitions encoded in functions? (Affects how humans reshape the workflow.)
-- [ ] **Q2** What is the `task` schema? Minimum viable columns (id, stage, work-area,
-  capability requirements, lease fields, payload, timestamps).
-- [ ] **Q3** Task id type — README argues **UUID** for a global id space. Adopt now even
-  though sharding is a non-goal, or defer?
-- [ ] **Q4** Are stages a fixed enum, a lookup table, or free-form strings validated by
-  the transition rules?
-- [ ] **Q5** Event log shape — one `events` table for everything (progress, transitions,
-  human notes), or separated? Append-only enforced how?
-- [ ] **Q6** Artifacts — inline JSON on the event, a separate `artifacts` table, or both?
+- [x] **Q1** Pipeline representation → **data-driven**; agents interact RPC-only.
+  (→ [ADR 0001](../decisions/0001-data-driven-state-machine.md))
+- [x] **Q2** Task schema → minimal structured core + `payload jsonb`.
+  (→ [ADR 0006](../decisions/0006-task-identity-events-artifacts.md), [design](../design/data-model.md))
+- [x] **Q3** Task id type → **UUIDv7**.
+  (→ [ADR 0006](../decisions/0006-task-identity-events-artifacts.md))
+- [x] **Q4** Stages → data-driven lookup scoped to a **workflow**; flow is **per lane**
+  via reusable workflows. (→ [ADR 0002](../decisions/0002-project-lane-workflow-hierarchy.md))
+- [x] **Q5** Event log → one append-only `events` table with a `type` discriminator.
+  (→ [ADR 0006](../decisions/0006-task-identity-events-artifacts.md))
+- [x] **Q6** Artifacts → **references** in event/payload `jsonb`, no table in v1.
+  (→ [ADR 0006](../decisions/0006-task-identity-events-artifacts.md), [ADR 0003](../decisions/0003-two-plane-source-of-truth.md))
+
+> **New (from design discussion):** the three agent axes — capability/role/work-area —
+> are unified into one generic **feature** mechanism with superset matching, and the
+> workflow can mutate features (reflexive governance). The source-of-truth boundary was
+> split into coordination (DB) vs. work product (external).
+> → [ADR 0004](../decisions/0004-feature-model.md), [ADR 0003](../decisions/0003-two-plane-source-of-truth.md)
 
 ## B. Agent-facing surface (the verbs)
 - [ ] **Q7** Confirm the verb set. README lists six: `claim_next_task`,
@@ -30,8 +37,9 @@ Legend: `[ ]` open · `[~]` in discussion · `[x]` resolved (→ ADR)
 ## C. Identity, auth & capability matching
 - [ ] **Q10** Token model: what claims does the JWT carry (role, capabilities,
   work-areas) and in what shape?
-- [ ] **Q11** How does `claim_next_task` match a task to an agent from **verified claims
-  only** (not arguments)? Set membership? Predicate? (Closes risk R3.)
+- [x] **Q11** Matching from verified claims → **feature superset containment** + lane
+  binding. (→ [ADR 0004](../decisions/0004-feature-model.md)) Token-claims *shape* still
+  open under Q10.
 - [ ] **Q12** Role model in Postgres — how do PostgREST roles map to agent roles, and
   what privileges does each role get on tables/functions/views?
 - [ ] **Q13** Who signs tokens and how are they issued/rotated? (May be deferrable to a
@@ -45,11 +53,10 @@ Legend: `[ ]` open · `[~]` in discussion · `[x]` resolved (→ ADR)
   `released`/`abandoned` intermediate stage with a count?
 
 ## E. Logic language
-- [ ] **Q17** PL language for the verbs — `plpgsql` (zero extra deps) vs `plv8`
-  (README's recommended default; JSON-native, shareable dry-run with JS/TS clients) vs
-  other. Trade-off: dependency/build weight vs. client-shared logic. (Risk R7.)
-- [ ] **Q18** Do we need any untrusted language (`plpython3u`, etc.) in v1, or is that a
-  deferred concern with everything in trusted languages for now?
+- [x] **Q17** PL language → **plpgsql-first escalation ladder** (plpgsql → plv8 → FDW),
+  climb only when forced. (→ [ADR 0005](../decisions/0005-logic-language-escalation.md))
+- [x] **Q18** Untrusted languages → deferred; everything trusted (plpgsql) in v1.
+  (→ [ADR 0005](../decisions/0005-logic-language-escalation.md))
 
 ## F. Environment, migrations & testing
 - [ ] **Q19** Migration tooling — raw ordered SQL files, sqitch, Flyway, dbmate, or

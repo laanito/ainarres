@@ -40,3 +40,4 @@ not begin until there is a plan in `plans/` complete enough to execute autonomou
 | Date       | Phase     | Note                                          |
 |------------|-----------|-----------------------------------------------|
 | 2026-06-05 | Analysis  | `.agents/` created; analysis + open questions drafted. |
+| 2026-06-05 | Design    | Data-model/state-machine cluster resolved → ADRs 0001–0006 + `design/data-model.md`. Open: auth, leases, env/test, scope. |
