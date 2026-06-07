@@ -35,15 +35,14 @@ Legend: `[ ]` open · `[~]` in discussion · `[x]` resolved (→ ADR)
 - [ ] **Q9** Can an agent hold more than one task at once? If so, how is that bounded?
 
 ## C. Identity, auth & capability matching
-- [ ] **Q10** Token model: what claims does the JWT carry (role, capabilities,
-  work-areas) and in what shape?
-- [x] **Q11** Matching from verified claims → **feature superset containment** + lane
-  binding. (→ [ADR 0004](../decisions/0004-feature-model.md)) Token-claims *shape* still
-  open under Q10.
-- [ ] **Q12** Role model in Postgres — how do PostgREST roles map to agent roles, and
-  what privileges does each role get on tables/functions/views?
-- [ ] **Q13** Who signs tokens and how are they issued/rotated? (May be deferrable to a
-  stub for v1.)
+- [x] **Q10** Token claims → `sub`, `family`, `role`, granted `features[]`, `exp`. Token
+  is the grant; effective = grant − family denials. (→ [ADR 0007](../decisions/0007-auth-identity-family-grant-deny.md))
+- [x] **Q11** Matching → **pure feature superset** over *effective* features (lane folded
+  in as a feature kind). (→ [ADR 0004](../decisions/0004-feature-model.md) amended by [0007](../decisions/0007-auth-identity-family-grant-deny.md))
+- [x] **Q12** Postgres roles → coarse fixed set (`agent`/`oversight`/`reaper`/`anon`);
+  functional role is a feature, not a Postgres role. (→ [ADR 0007](../decisions/0007-auth-identity-family-grant-deny.md))
+- [x] **Q13** Issuance → HS256 shared secret + privileged mint for v1; asymmetric/JWKS +
+  rotation deferred. (→ [ADR 0007](../decisions/0007-auth-identity-family-grant-deny.md))
 
 ## D. Leases, heartbeat & recovery
 - [ ] **Q14** Lease duration default + heartbeat cadence. (Closes risk R4.)

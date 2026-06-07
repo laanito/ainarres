@@ -1,6 +1,6 @@
 # ADR 0004 — Unified feature model, superset matching, reflexive trait mutation
 
-- Status: Accepted
+- Status: Accepted (amended by [0007](0007-auth-identity-family-grant-deny.md))
 - Date: 2026-06-05
 - Closes: Q11 (matching from claims); partially informs Q10/Q12 (auth — still open)
 
@@ -56,8 +56,24 @@ flow that strips an underperforming agent of a work-area).
 ## Consequences
 
 - `claim_next_task` is one set-containment query; the human view of "who can do what" is
-  a read of `agent_features` vs `transitions.required_features`.
+  a read of effective features vs `transitions.required_features`.
 - Agent permissions are coordination state living in the DB (see
   [0003](0003-two-plane-source-of-truth.md)), audited via `events`.
-- Token claims must be able to carry the agent's feature set — feeds the still-open auth
-  ADR (Q10/Q12/Q13).
+- Token claims must be able to carry the agent's feature set — resolved in the auth ADR
+  (Q10/Q12/Q13).
+
+## Amendments
+
+[ADR 0007](0007-auth-identity-family-grant-deny.md) refines this ADR without changing the
+superset matching rule:
+
+- **Source of features.** The eligible set is no longer a per-agent `agent_features`
+  table read; it is **effective features = granted (signed token, family-scoped) −
+  denied (DB `feature_denials`, family-scoped)**. Grants and vetoes attach to the
+  **agent family** (the durable `harness+model` unit), not the ephemeral instance.
+- **Lane-binding folded into features.** "Bound to the lane" is no longer a separate
+  check: lane membership is just a feature `kind=lane`. A task in lane *X* implicitly
+  requires feature `(lane, X)`, so matching collapses to **pure feature superset**.
+- **Reflexive mutation targets a family.** A transition `effect` that revokes a feature
+  writes a family-scoped `feature_denials` row (instant), rather than mutating a
+  per-instance holdings table; `tasks.subject` may name a family.

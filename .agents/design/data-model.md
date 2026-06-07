@@ -9,9 +9,12 @@
 ```
 projects ──< lanes >── workflows ──< stages
                            └────────< transitions
-            lanes ──< tasks >── (subject) ── agents
+            lanes ──< tasks >── (subject) ── agents/families
                         └──< events
-features >── agent_features ──< agents
+agent_families ──< agents              (durable class ──< ephemeral instance)
+agent_families ──< family_features      (provisioning grant; minted into the token)
+agent_families ──< feature_denials      (governance veto, fresh)
+features >── (kinds incl. `lane`; referenced by family_features, denials, requirements)
 features >── (required_features on transitions and tasks)
 ```
 
@@ -46,34 +49,59 @@ subject), `guard?`.
 ### `tasks`
 The unit of work. Small structured core; the rest in `payload`.
 `id (uuidv7)`, `lane_id`, `stage`, `required_features[]?` (extras on top of the flow),
-`subject_agent?` (when the task is *about* an agent), `claimed_by?`, `lease_expires_at?`,
-`priority`, `attempts`, `payload jsonb`, `created_by`, `created_at`, `updated_at`.
+`subject?` (when the task is *about* an agent/family — e.g. governance), `claimed_by?`,
+`lease_expires_at?`, `priority`, `attempts`, `payload jsonb`, `created_by`, `created_at`,
+`updated_at`.
 
 ### `events`
 Append-only oversight feed + audit trail. `id`, `task_id`, `actor`, `type`, `data jsonb`,
 `created_at`. No `UPDATE`/`DELETE` granted; trigger enforces.
 
-### `agents`
-Identity + the features it holds. `id`, `display_name`, … Authorization reads from
-**verified token claims**, not this table; the table exists so `claimed_by`,
-`created_by`, event `actor`, and `subject_agent` resolve to a row, and as the basis for
-token issuance.
+### `agent_families` — identity & competence unit ([ADR 0007](../decisions/0007-auth-identity-family-grant-deny.md))
+The **durable** class = `(harness/tool + model)`, e.g. `opencode+qwen`,
+`claude-code+opus`. Grants and denials attach here, because competence is a family
+property that survives instance respawn. `id`, `key`, `description`.
 
-### `features` / `agent_features`
-`features`: `id`, `kind` (`capability` | `role` | `work-area` | …), `key`.
-`agent_features`: `agent_id`, `feature_id`. Mutable; every change lands in `events`.
+### `agents` — instance
+An **ephemeral** instance of a family. `id` (= token `sub`), `family_id`,
+`first_seen_at`. Exists so `claimed_by`, `created_by`, event `actor`, and task `subject`
+resolve to a row. Authorization never trusts this table — it derives from effective
+features (below).
 
-## Matching ([ADR 0004](../decisions/0004-feature-model.md))
+### `features`
+The trait vocabulary. `id`, `kind` (`capability` | `role` | `work-area` | `lane` | …),
+`key`. **`lane` is a feature kind** — lane membership is just a feature, not a separate
+dimension.
 
-One uniform rule, evaluated from signed claims:
+### `family_features` — grant (provisioning)
+What a family is provisioned with. `family_id`, `feature_id`. Human-assigned; the mint
+path reads this to stamp the token's `features[]`.
 
-> An agent may claim a task **iff** it is bound to the task's lane **and** its feature set
-> ⊇ the `required_features` of at least one legal transition out of the task's current
-> stage, **plus** any task-level `required_features`.
+### `feature_denials` — veto (governance)
+Family-scoped revocations, written by governance; always fresh. `id`, `family_id`,
+`feature_id`, `reason`, `created_at`.
 
-- **Lane binding** = *where* an agent works.
+## Identity & effective features ([ADR 0007](../decisions/0007-auth-identity-family-grant-deny.md))
+
+- **Token (grant, signed):** `sub`, `family`, `role` (Postgres role), `features[]`
+  (snapshot of `family_features`), `exp`. Upper bound; an agent can't add to it.
+- **Effective features = token `features[]` − `feature_denials(family)`.** Revoking is
+  instant; granting needs a reissued token.
+- **Coarse Postgres roles** gate which functions you may call: `agent`, `oversight`,
+  `reaper`/`admin`, `anon`. The functional role (analyst/reviewer/…) is a *feature*, not
+  a Postgres role.
+
+## Matching ([ADR 0004](../decisions/0004-feature-model.md), amended by [0007](../decisions/0007-auth-identity-family-grant-deny.md))
+
+One uniform rule — **pure feature superset** over the **effective** feature set:
+
+> An agent may claim a task **iff** its effective features ⊇ the `required_features` of
+> at least one legal transition out of the task's current stage, **plus** any task-level
+> `required_features`. A task in lane *X* implicitly requires feature `(lane, X)`.
+
+- **Lane** = a `lane`-kind feature → *where* an agent works.
 - **Feature superset** = eligibility across every dimension at once (capability, role,
-  work-area, …).
+  work-area, lane).
 - **Work-area features on a side-effecting transition** gate external actions (e.g. the
   "publish weekly report to Asana" transition requires `work-area:asana`).
 
@@ -86,9 +114,11 @@ Agents never write tables directly. Verbs (exact contracts = open Q7–Q9):
 
 ## Reflexive governance (plumbing now, policy later)
 
-`transitions.effects` + `tasks.subject_agent` make "the workflow grants/revokes an
-agent's feature" expressible from day one. An actual governance flow (e.g. quality review
-→ revoke a work-area) is a **later slice**.
+`transitions.effects` + `tasks.subject` make "the workflow grants/revokes a feature"
+expressible from day one. A revoke writes a **family-scoped `feature_denials`** row
+(instant effect); a grant updates `family_features` (takes effect on token reissue). An
+actual governance flow (e.g. quality review → revoke a work-area for a family) is a
+**later slice**.
 
 ## Language ([ADR 0005](../decisions/0005-logic-language-escalation.md))
 
@@ -96,6 +126,6 @@ agent's feature" expressible from day one. An actual governance flow (e.g. quali
 
 ## Still open (not decided here)
 
-Auth/JWT claims shape and role mapping (Q10/Q12/Q13), lease/heartbeat tuning and reaper
-(Q14–Q16), env/migrations/testing (Q19–Q22), scope confirmations (Q23/Q24). See
+Verb contracts (Q7–Q9), lease/heartbeat tuning and reaper (Q14–Q16),
+env/migrations/testing (Q19–Q22), scope confirmations (Q23/Q24). See
 [open-questions.md](../analysis/open-questions.md).
