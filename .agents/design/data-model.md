@@ -39,19 +39,20 @@ A named, **reusable** flow. Two lanes running the same process share one. `id`, 
 `description`.
 
 ### `stages`
-A column in a workflow's board. `id`, `workflow_id`, `key`, `ordering`, `is_terminal`.
+A column in a workflow's board. `id`, `workflow_id`, `key`, `ordering`, `is_initial`
+(where `create_task` lands), `is_terminal`.
 
 ### `transitions`
 A legal move. The single place flow rules are enforced. `id`, `workflow_id`,
-`from_stage`, `to_stage`, `required_features[]`, `effects jsonb?` (grant/revoke on
-subject), `guard?`.
+`from_stage`, `to_stage`, `kind` (`advance` | `reject` — selects which verb may execute
+it), `required_features[]`, `effects jsonb?` (grant/revoke on subject), `guard?`.
 
 ### `tasks`
 The unit of work. Small structured core; the rest in `payload`.
 `id (uuidv7)`, `lane_id`, `stage`, `required_features[]?` (extras on top of the flow),
 `subject?` (when the task is *about* an agent/family — e.g. governance), `claimed_by?`,
-`lease_expires_at?`, `priority`, `attempts`, `payload jsonb`, `created_by`, `created_at`,
-`updated_at`.
+`lease_expires_at?`, `blocked` + `blocked_reason?` (orthogonal park flag), `priority`,
+`attempts`, `payload jsonb`, `created_by`, `created_at`, `updated_at`.
 
 ### `events`
 Append-only oversight feed + audit trail. `id`, `task_id`, `actor`, `type`, `data jsonb`,
@@ -105,12 +106,23 @@ One uniform rule — **pure feature superset** over the **effective** feature se
 - **Work-area features on a side-effecting transition** gate external actions (e.g. the
   "publish weekly report to Asana" transition requires `work-area:asana`).
 
-## Agent surface (RPC-only — [ADR 0001](../decisions/0001-data-driven-state-machine.md))
+## Agent surface (RPC-only — [ADR 0001](../decisions/0001-data-driven-state-machine.md), contracts [ADR 0008](../decisions/0008-verb-contracts.md))
 
-Agents never write tables directly. Verbs (exact contracts = open Q7–Q9):
-`create_task` (agents may create work for other agents), `claim_next_task`,
-`report_progress`, `advance_task` (validates the transition; applies its `effects`),
-`release_task`, `block_task`/`unblock_task`, `heartbeat`.
+Agents never write tables directly. Nine verbs, each returning a **uniform envelope**
+`{ok, code, reason?, task?, event?}` (always HTTP 200):
+
+- `create_task` (agents may create work for other agents) — lands at `is_initial` stage.
+- `claim_next_task` — `FOR UPDATE SKIP LOCKED`; one active task per instance.
+- `report_progress` — append a `progress` event; renews lease.
+- `advance_task` — execute an `advance` transition; apply `effects`; **release the hold**.
+- `reject_task` — execute a `reject` transition; separately permission-gated.
+- `release_task` — return a held task unchanged; `attempts++`.
+- `block_task` / `unblock_task` — orthogonal `blocked` flag + reason.
+- `heartbeat` — renew the lease.
+
+Every verb on a held task asserts `claimed_by = sub AND lease_expires_at > now()`; a
+reaped agent returning late gets `code:"lease_lost"` and must re-claim. Eligibility is
+computed from **effective features**, never from arguments.
 
 ## Reflexive governance (plumbing now, policy later)
 
@@ -126,6 +138,5 @@ actual governance flow (e.g. quality review → revoke a work-area for a family)
 
 ## Still open (not decided here)
 
-Verb contracts (Q7–Q9), lease/heartbeat tuning and reaper (Q14–Q16),
-env/migrations/testing (Q19–Q22), scope confirmations (Q23/Q24). See
-[open-questions.md](../analysis/open-questions.md).
+Lease/heartbeat tuning and reaper (Q14–Q16), env/migrations/testing (Q19–Q22), scope
+confirmations (Q23/Q24). See [open-questions.md](../analysis/open-questions.md).
