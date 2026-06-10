@@ -27,12 +27,12 @@ Legend: `[ ]` open · `[~]` in discussion · `[x]` resolved (→ ADR)
 > → [ADR 0004](../decisions/0004-feature-model.md), [ADR 0003](../decisions/0003-two-plane-source-of-truth.md)
 
 ## B. Agent-facing surface (the verbs)
-- [ ] **Q7** Confirm the verb set. README lists six: `claim_next_task`,
-  `report_progress`, `advance_task`, `release_task`, `block_task`/`unblock_task`,
-  `heartbeat`. Is that the v1 set? Anything missing (e.g. `fail_task`)?
-- [ ] **Q8** Exact signature + return contract of each verb (inputs, success shape,
-  error shape).
-- [ ] **Q9** Can an agent hold more than one task at once? If so, how is that bounded?
+- [x] **Q7** Verb set → **nine** verbs; rejection is its own verb (`reject_task`) for
+  permission granularity; failure stays a forward transition. (→ [ADR 0008](../decisions/0008-verb-contracts.md))
+- [x] **Q8** Contract → **uniform envelope** `{ok, code, reason?, task?, event?}`, always
+  HTTP 200; outcomes are values not exceptions. (→ [ADR 0008](../decisions/0008-verb-contracts.md))
+- [x] **Q9** Holding → **one active task per instance**; scale by spawning instances.
+  (→ [ADR 0008](../decisions/0008-verb-contracts.md))
 
 ## C. Identity, auth & capability matching
 - [x] **Q10** Token claims → `sub`, `family`, `role`, granted `features[]`, `exp`. Token
