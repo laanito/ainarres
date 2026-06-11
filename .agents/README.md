@@ -44,3 +44,4 @@ not begin until there is a plan in `plans/` complete enough to execute autonomou
 | 2026-06-07 | Design    | Auth/identity cluster resolved → ADR 0007 (family-scoped grant/veto), amends 0004. Open: verbs, leases, env/test, scope. |
 | 2026-06-10 | Design    | Verb-contracts cluster resolved → ADR 0008 (9 verbs, uniform envelope, one-task-per-instance). Open: leases, env/test, scope. |
 | 2026-06-10 | Design    | Leases/reaper cluster resolved → ADR 0009 (lazy reclaim, no cron; data-driven leases; poison→blocked). Open: env/test, scope. |
+| 2026-06-10 | Design    | Env/testing + scope resolved → ADRs 0010–0011 (postgres:18 + dbmate + vitest; v1 boundary). **All Q1–Q24 closed; design complete.** Next: plan. |
