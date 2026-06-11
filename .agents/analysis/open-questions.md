@@ -59,19 +59,21 @@ Legend: `[ ]` open · `[~]` in discussion · `[x]` resolved (→ ADR)
   (→ [ADR 0005](../decisions/0005-logic-language-escalation.md))
 
 ## F. Environment, migrations & testing
-- [ ] **Q19** Migration tooling — raw ordered SQL files, sqitch, Flyway, dbmate, or
-  similar? Must support deterministic teardown/rebuild (the dockerized loop).
-- [ ] **Q20** `docker compose` topology for local: Postgres image (which extensions
-  baked in — `pg_cron`, `plv8`?), PostgREST, and how the schema loads on boot.
-- [ ] **Q21** DB test strategy — pgTAP in-DB, vs. an external test runner driving SQL/RPC
-  over the PostgREST surface, vs. both. Must cover **concurrency** (the `SKIP LOCKED`
-  race) and **illegal transitions**. (Risk R5.)
-- [ ] **Q22** How do we exercise true concurrency in tests deterministically (multiple
-  sessions claiming at once)?
+- [x] **Q19** Migrations → **dbmate** (plain SQL up/down). (→ [ADR 0010](../decisions/0010-environment-migrations-testing.md))
+- [x] **Q20** Topology → stock **`postgres:18`** (no extensions) + `postgrest` + one-shot
+  dbmate `migrate`. (→ [ADR 0010](../decisions/0010-environment-migrations-testing.md))
+- [x] **Q21** Tests → **TypeScript/Node (vitest)** driving the PostgREST surface; pgTAP
+  optional/later. (→ [ADR 0010](../decisions/0010-environment-migrations-testing.md))
+- [x] **Q22** Concurrency → *N* connections + **release barrier**, assert invariants (no
+  double-claim; successes = min(N,K)). (→ [ADR 0010](../decisions/0010-environment-migrations-testing.md))
 
 ## G. Scope boundaries (confirm deferrals)
-- [ ] **Q23** Confirm scaling (single-writer/sharding/replication), external egress
-  (outbox + `LISTEN/NOTIFY`), and pooling (PgBouncer) are **out of v1 scope** — kept as
-  constraints we don't design *against*, but don't build *yet*.
-- [ ] **Q24** Is a human oversight UI in scope for v1, or only human-readable
-  tables/views with the UI deferred?
+- [x] **Q23** Confirmed — scaling, egress, pooling all **deferred** (constraints, not
+  built in v1). (→ [ADR 0011](../decisions/0011-v1-scope-boundary.md))
+- [x] **Q24** Oversight → **human-readable views in v1, UI deferred**.
+  (→ [ADR 0011](../decisions/0011-v1-scope-boundary.md))
+
+---
+
+**All open questions (Q1–Q24) are closed. Design phase complete.** Next artifact: the
+autonomous plan in [`plans/`](../plans/).
