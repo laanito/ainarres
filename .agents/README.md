@@ -19,8 +19,10 @@ head.
 
 ## Phase gate
 
-We are in **Phase 2: analysis → design → planning. No code yet.** Implementation does
-not begin until there is a plan in `plans/` complete enough to execute autonomously.
+Design is **complete** (ADRs 0001–0012). We are now in **planning**: the autonomous build
+plan lives in [`plans/v1-plan.md`](plans/v1-plan.md). Implementation begins once that plan
+is approved — starting at milestone **M0**. The v1 success criterion is **self-hosting**
+([ADR 0012](decisions/0012-self-hosting-success-criterion.md)).
 
 ## Conventions
 
@@ -45,3 +47,4 @@ not begin until there is a plan in `plans/` complete enough to execute autonomou
 | 2026-06-10 | Design    | Verb-contracts cluster resolved → ADR 0008 (9 verbs, uniform envelope, one-task-per-instance). Open: leases, env/test, scope. |
 | 2026-06-10 | Design    | Leases/reaper cluster resolved → ADR 0009 (lazy reclaim, no cron; data-driven leases; poison→blocked). Open: env/test, scope. |
 | 2026-06-10 | Design    | Env/testing + scope resolved → ADRs 0010–0011 (postgres:18 + dbmate + vitest; v1 boundary). **All Q1–Q24 closed; design complete.** Next: plan. |
+| 2026-06-10 | Planning  | Success criterion = **self-hosting** (ADR 0012). Autonomous build plan written → `plans/v1-plan.md` (M0–M6). Next: implement M0. |
