@@ -36,11 +36,13 @@ rules, requisites), `workflow_id`, `ordering`.
 
 ### `workflows`
 A named, **reusable** flow. Two lanes running the same process share one. `id`, `key`,
-`description`.
+`description`, `default_lease`, `default_max_attempts` (fallbacks for their stages).
 
 ### `stages`
 A column in a workflow's board. `id`, `workflow_id`, `key`, `ordering`, `is_initial`
-(where `create_task` lands), `is_terminal`.
+(where `create_task` lands), `is_terminal`, `lease_duration?`, `max_attempts?`
+(null → fall back to the workflow default → system default; see
+[ADR 0009](../decisions/0009-leases-reaper.md)).
 
 ### `transitions`
 A legal move. The single place flow rules are enforced. `id`, `workflow_id`,
@@ -124,6 +126,24 @@ Every verb on a held task asserts `claimed_by = sub AND lease_expires_at > now()
 reaped agent returning late gets `code:"lease_lost"` and must re-claim. Eligibility is
 computed from **effective features**, never from arguments.
 
+## Leases & recovery ([ADR 0009](../decisions/0009-leases-reaper.md))
+
+No background process. Recovery is **lazy reclaim** — a task is *available* to
+`claim_next_task` when:
+
+```
+claimed_by IS NULL  OR  lease_expires_at < now()
+```
+
+- **Lease** stamped at claim = `now() + COALESCE(stage.lease_duration,
+  workflow.default_lease, system_default ≈ 5 min)`. `heartbeat`/`report_progress`/
+  `advance`/`reject` renew it; cadence (~lease/5) is advisory to clients.
+- **Reclaim** returns the task to open at the same stage with `attempts++`. When
+  `attempts` would exceed `max_attempts` (stage → workflow → system), it is auto-`blocked`
+  (`"max attempts exceeded"`) instead — reusing the block flag, no `abandoned` state.
+- **`abandoned` view** = `lease_expires_at < now() AND claimed_by IS NOT NULL`, so the
+  board surfaces stuck work without a sweeper. `pg_cron` is deferred/optional.
+
 ## Reflexive governance (plumbing now, policy later)
 
 `transitions.effects` + `tasks.subject` make "the workflow grants/revokes a feature"
@@ -138,5 +158,5 @@ actual governance flow (e.g. quality review → revoke a work-area for a family)
 
 ## Still open (not decided here)
 
-Lease/heartbeat tuning and reaper (Q14–Q16), env/migrations/testing (Q19–Q22), scope
-confirmations (Q23/Q24). See [open-questions.md](../analysis/open-questions.md).
+Env/migrations/testing (Q19–Q22), scope confirmations (Q23/Q24). See
+[open-questions.md](../analysis/open-questions.md).

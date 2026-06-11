@@ -45,11 +45,12 @@ Legend: `[ ]` open · `[~]` in discussion · `[x]` resolved (→ ADR)
   rotation deferred. (→ [ADR 0007](../decisions/0007-auth-identity-family-grant-deny.md))
 
 ## D. Leases, heartbeat & recovery
-- [ ] **Q14** Lease duration default + heartbeat cadence. (Closes risk R4.)
-- [ ] **Q15** Reaper mechanism — `pg_cron` (README's choice) vs. lazy reclaim at
-  claim-time vs. both. Is `pg_cron` acceptable as a dependency for v1?
-- [ ] **Q16** What happens to a reaped task — straight back to open, or to a
-  `released`/`abandoned` intermediate stage with a count?
+- [x] **Q14** Lease → data-driven `stage.lease_duration` → `workflow.default_lease` →
+  system (~5 min); heartbeat cadence advisory (~lease/5). (→ [ADR 0009](../decisions/0009-leases-reaper.md))
+- [x] **Q15** Recovery → **lazy reclaim** (claim treats expired leases as available); no
+  process; `pg_cron` deferred/optional. (→ [ADR 0009](../decisions/0009-leases-reaper.md))
+- [x] **Q16** Reaped task → open at same stage, `attempts++`; `max_attempts` exceeded
+  auto-`blocked` (reuse block flag, no `abandoned` state). (→ [ADR 0009](../decisions/0009-leases-reaper.md))
 
 ## E. Logic language
 - [x] **Q17** PL language → **plpgsql-first escalation ladder** (plpgsql → plv8 → FDW),
