@@ -1,0 +1,44 @@
+# AINARRES local substrate (ADR 0010): stock postgres:18 + PostgREST + a one-shot
+# dbmate migrate step. No extensions, no custom image. Dev-only defaults inline.
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-ainarres}
+    ports:
+      - "${DB_PORT:-5432}:5432" # exposed for host psql + the concurrency tests' pg client
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-ainarres}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    image: amacneil/dbmate:latest
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-ainarres}?sslmode=disable
+      DBMATE_MIGRATIONS_DIR: /db/migrations
+    volumes:
+      - ./db:/db
+    command: ["--no-dump-schema", "up"]
+    restart: "no"
+
+  postgrest:
+    image: postgrest/postgrest:latest
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${AUTHENTICATOR_PASSWORD:-authenticator_dev_pw}@db:5432/${POSTGRES_DB:-ainarres}
+      PGRST_DB_SCHEMAS: api
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET:-ainarres-dev-only-secret-change-me-min-32-chars}
+    ports:
+      - "${PGRST_PORT:-3010}:3000"

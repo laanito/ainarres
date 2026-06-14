@@ -48,3 +48,4 @@ is approved — starting at milestone **M0**. The v1 success criterion is **self
 | 2026-06-10 | Design    | Leases/reaper cluster resolved → ADR 0009 (lazy reclaim, no cron; data-driven leases; poison→blocked). Open: env/test, scope. |
 | 2026-06-10 | Design    | Env/testing + scope resolved → ADRs 0010–0011 (postgres:18 + dbmate + vitest; v1 boundary). **All Q1–Q24 closed; design complete.** Next: plan. |
 | 2026-06-10 | Planning  | Success criterion = **self-hosting** (ADR 0012). Autonomous build plan written → `plans/v1-plan.md` (M0–M6). Next: implement M0. |
+| 2026-06-10 | Build     | **M0 done** — dockerized loop (postgres:18 + PostgREST + dbmate) + vitest smoke, green from zero. Retro in `retros/m0-harness.md`. Next: M1 schema. |
