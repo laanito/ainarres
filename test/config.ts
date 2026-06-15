@@ -9,3 +9,9 @@ const fromEnv = (v: string | undefined): string | undefined =>
 export const BASE_URL = fromEnv(process.env.AINARRES_BASE_URL) ?? "http://localhost:3010";
 export const JWT_SECRET =
   fromEnv(process.env.JWT_SECRET) ?? "ainarres-dev-only-secret-change-me-min-32-chars";
+
+// Postgres role/db used by the db helper (psql inside the `db` container). Match
+// the compose defaults; the container's local socket trusts these without a
+// password, so no PGPASSWORD is needed.
+export const PG_USER = fromEnv(process.env.POSTGRES_USER) ?? "postgres";
+export const PG_DB = fromEnv(process.env.POSTGRES_DB) ?? "ainarres";
