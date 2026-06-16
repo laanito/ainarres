@@ -50,3 +50,4 @@ is approved — starting at milestone **M0**. The v1 success criterion is **self
 | 2026-06-10 | Planning  | Success criterion = **self-hosting** (ADR 0012). Autonomous build plan written → `plans/v1-plan.md` (M0–M6). Next: implement M0. |
 | 2026-06-10 | Build     | **M0 done** — dockerized loop (postgres:18 + PostgREST + dbmate) + vitest smoke, green from zero. Retro in `retros/m0-harness.md`. Next: M1 schema. |
 | 2026-06-15 | Build     | **M1 done** — full data model in a private `app` schema + coarse roles + idempotent seed; append-only events; down-migrations reversible. 17 tests green. Retro in `retros/m1-schema.md`. Next: M2 auth. |
+| 2026-06-16 | Build     | **M2 done** — auth functions: `effective_features` (grant−veto, instant revocation), `whoami`, privileged `token_claims`; HS256 signing in the TS minter (no in-DB crypto). 25 tests green. Retro in `retros/m2-auth.md`. Next: M3 create+claim. |
