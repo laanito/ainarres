@@ -7,8 +7,14 @@ import { execFile, query, scalar, waitForDb } from "./helpers/db";
 
 beforeAll(() => waitForDb());
 
+// Scoped to the seed's own entities — other test files add their own fixtures
+// (m3, race) in parallel, so global counts would be polluted. We verify the seed
+// loaded correctly, not that the DB contains nothing else.
+const SEED_FAMILIES = "('opencode+qwen','claude-code+opus')";
 const counts = () => ({
-  features: scalar<number>("select count(*)::int from app.features"),
+  features: scalar<number>(
+    "select count(*)::int from app.features where name = any(array['lane:api','role:analyst','role:reviewer','capability:plan'])",
+  ),
   workflows: scalar<number>("select count(*)::int from app.workflows where key = 'dev-loop'"),
   stages: scalar<number>(
     "select count(*)::int from app.stages s join app.workflows w on w.id = s.workflow_id where w.key = 'dev-loop'",
@@ -17,8 +23,13 @@ const counts = () => ({
   transitions: scalar<number>(
     "select count(*)::int from app.transitions t join app.workflows w on w.id = t.workflow_id where w.key = 'dev-loop'",
   ),
-  families: scalar<number>("select count(*)::int from app.agent_families"),
-  family_features: scalar<number>("select count(*)::int from app.family_features"),
+  families: scalar<number>(
+    `select count(*)::int from app.agent_families where key in ${SEED_FAMILIES}`,
+  ),
+  family_features: scalar<number>(
+    `select count(*)::int from app.family_features ff
+     join app.agent_families f on f.id = ff.family_id where f.key in ${SEED_FAMILIES}`,
+  ),
 });
 
 describe("seed fixture", () => {
