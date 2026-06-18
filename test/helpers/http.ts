@@ -29,3 +29,10 @@ export function rpc(name: string, { token, body = {} }: RpcOpts = {}): Promise<R
     body: JSON.stringify(body),
   });
 }
+
+// GET a PostgREST resource (table/view), e.g. restGet("board?lane=eq.m5", { token }).
+export function restGet(path: string, { token }: { token?: string } = {}): Promise<Response> {
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return fetch(`${BASE_URL}/${path}`, { headers });
+}

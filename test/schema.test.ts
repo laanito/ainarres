@@ -30,11 +30,13 @@ describe("domain tables", () => {
     expect(rows.map((r) => r.table_name)).toEqual(EXPECTED);
   });
 
-  it("none of the domain tables leak into the `api` schema", () => {
+  it("no domain base tables leak into the `api` schema", () => {
+    // `api` holds only verb functions + oversight VIEWS (M5); never a base table —
+    // that's what keeps agent access RPC-only. (information_schema.tables counts
+    // views too, so filter to BASE TABLE.)
     const n = scalar<number>(
-      "select count(*)::int from information_schema.tables where table_schema = 'api'",
+      "select count(*)::int from information_schema.tables where table_schema = 'api' and table_type = 'BASE TABLE'",
     );
-    // Only functions live in `api` (api.ping from M0); no tables.
     expect(n).toBe(0);
   });
 });
