@@ -117,4 +117,72 @@ join app.features ft on ft.name = any (array['lane:api', 'role:analyst', 'role:r
 where f.key = 'claude-code+opus'
 on conflict (family_id, feature_id) do nothing;
 
+-- ── M6: the snippet-factory self-hosting pipeline ────────────────────────────
+-- The real pipeline exercised end-to-end by opencode+qwen3.6 workers and a
+-- Claude reviewer (ADR 0012 / .agents/plans/m6-self-hosting.md). Short coding
+-- tasks: a worker writes a solution file + self-validates, a reviewer verifies.
+
+insert into app.features (kind, key) values
+  ('lane', 'snippets'), ('role', 'worker'), ('role', 'reviewer')
+on conflict (kind, key) do nothing;
+
+insert into app.workflows (key, description) values
+  ('snippet-factory', 'Tiny coding tasks: worker writes + self-validates, reviewer verifies.')
+on conflict (key) do nothing;
+
+-- todo (worker writes the solution) → review (reviewer verifies) → done.
+insert into app.stages (workflow_id, key, ordering, is_initial, is_terminal)
+select w.id, v.key, v.ordering, v.is_initial, v.is_terminal
+from app.workflows w
+cross join (values
+  ('todo',   0, true,  false),
+  ('review', 1, false, false),
+  ('done',   2, false, true)
+) as v(key, ordering, is_initial, is_terminal)
+where w.key = 'snippet-factory'
+on conflict (workflow_id, key) do nothing;
+
+-- worker advances todo→review; reviewer advances review→done or rejects review→todo.
+insert into app.transitions (workflow_id, from_stage, to_stage, kind, required_features)
+select w.id, sf.id, st.id, 'advance', array['lane:snippets', 'role:worker']
+from app.workflows w
+join app.stages sf on sf.workflow_id = w.id and sf.key = 'todo'
+join app.stages st on st.workflow_id = w.id and st.key = 'review'
+where w.key = 'snippet-factory'
+  and not exists (select 1 from app.transitions t where t.workflow_id = w.id and t.from_stage = sf.id and t.to_stage = st.id and t.kind = 'advance');
+
+insert into app.transitions (workflow_id, from_stage, to_stage, kind, required_features)
+select w.id, sf.id, st.id, 'advance', array['lane:snippets', 'role:reviewer']
+from app.workflows w
+join app.stages sf on sf.workflow_id = w.id and sf.key = 'review'
+join app.stages st on st.workflow_id = w.id and st.key = 'done'
+where w.key = 'snippet-factory'
+  and not exists (select 1 from app.transitions t where t.workflow_id = w.id and t.from_stage = sf.id and t.to_stage = st.id and t.kind = 'advance');
+
+insert into app.transitions (workflow_id, from_stage, to_stage, kind, required_features)
+select w.id, sf.id, st.id, 'reject', array['lane:snippets', 'role:reviewer']
+from app.workflows w
+join app.stages sf on sf.workflow_id = w.id and sf.key = 'review'
+join app.stages st on st.workflow_id = w.id and st.key = 'todo'
+where w.key = 'snippet-factory'
+  and not exists (select 1 from app.transitions t where t.workflow_id = w.id and t.from_stage = sf.id and t.to_stage = st.id and t.kind = 'reject');
+
+insert into app.lanes (project_id, key, workflow_id, context)
+select p.id, 'snippets', w.id, '{"work_dir": "work/"}'::jsonb
+from app.projects p, app.workflows w
+where p.slug = 'ainarres' and w.key = 'snippet-factory'
+on conflict (project_id, key) do nothing;
+
+-- The worker family (durable competence unit, ADR 0007): opencode harness + qwen3.6.
+insert into app.agent_families (key, description) values
+  ('opencode+qwen3.6', 'opencode harness, qwen3.6 model — snippet worker')
+on conflict (key) do nothing;
+
+insert into app.family_features (family_id, feature_id)
+select f.id, ft.id
+from app.agent_families f
+join app.features ft on ft.name = any (array['lane:snippets', 'role:worker'])
+where f.key = 'opencode+qwen3.6'
+on conflict (family_id, feature_id) do nothing;
+
 commit;
