@@ -9,3 +9,9 @@ coverage/
 # stores only path references (ADR 0003). Accepted demo outputs are committed
 # deliberately (M6b); routine run output stays out of git.
 work/
+
+# opencode runtime: keep our authored skill + agent; ignore opencode's own
+# scaffolding (node_modules, plugin manifest).
+.opencode/*
+!.opencode/agent/
+!.opencode/skill/
