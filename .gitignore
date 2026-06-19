@@ -4,3 +4,8 @@ coverage/
 .DS_Store
 *.local
 .env
+
+# Worker scratch space: snippet deliverables land under work/<task-id>/. The DB
+# stores only path references (ADR 0003). Accepted demo outputs are committed
+# deliberately (M6b); routine run output stays out of git.
+work/
