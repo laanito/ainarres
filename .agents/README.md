@@ -19,10 +19,12 @@ head.
 
 ## Phase gate
 
-Design is **complete** (ADRs 0001–0012). We are now in **planning**: the autonomous build
-plan lives in [`plans/v1-plan.md`](plans/v1-plan.md). Implementation begins once that plan
-is approved — starting at milestone **M0**. The v1 success criterion is **self-hosting**
-([ADR 0012](decisions/0012-self-hosting-success-criterion.md)).
+**v1 is complete — the success criterion is met.** Design (ADRs 0001–0012) → build
+(M0–M6) is done; the self-hosting checkpoint ([ADR 0012](decisions/0012-self-hosting-success-criterion.md))
+passed on 2026-06-19: a live `opencode + qwen3.6` worker carried real coding tasks
+end to end through the verbs, with a Claude reviewer ([retro](retros/m6b-dogfood.md),
+artifact in [`examples/dogfood-2026-06-19/`](../examples/dogfood-2026-06-19/)).
+AINARRES can now be used to coordinate its own further development.
 
 ## Conventions
 
@@ -55,3 +57,4 @@ is approved — starting at milestone **M0**. The v1 success criterion is **self
 | 2026-06-18 | Build     | **M4 done** — rest of the verbs: advance/reject (shared `do_transition`, guards, effects, release-the-hold), release (attempts→auto-block), block/unblock, report_progress, heartbeat; `lease_lost` enforced throughout. 41 tests green. Retro in `retros/m4-verbs.md`. Next: M5 recovery + views. |
 | 2026-06-19 | Build     | **M5 done** — lazy reclaim accounting in `claim_next_task` (reclaim → attempts++, poison → auto-block & skip) + oversight views `board`/`feed`/`abandoned`. 46 tests green. Retro in `retros/m5-recovery-views.md`. Next: M6 self-hosting checkpoint. |
 | 2026-06-19 | Build     | **M6a done** — agent surface: self-contained `bin/ainarres.mjs` CLI (zero deps) + worker skill + `snippet-factory` pipeline seed + `opencode+qwen3.6` family; deterministic scripted-worker e2e (create→solve→validate→review→done + reject/rework). 48 tests green. Plan `plans/m6-self-hosting.md`, retro `retros/m6a-cli-pipeline.md`. Next: M6b live qwen dogfood. |
+| 2026-06-19 | **Done**  | **M6b — success gate ✅** Live `opencode + qwen3.6` worker carried real tasks end to end through the verbs (claim→solve→self-validate→advance), Claude reviewed & accepted; work product in `examples/dogfood-2026-06-19/`. **v1 self-hosting criterion met** (ADR 0012). Retro `retros/m6b-dogfood.md`. |
