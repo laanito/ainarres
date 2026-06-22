@@ -70,6 +70,11 @@ A frontier model (Claude) typically holds `role:designer` + `role:reviewer` +
 if its runtime is push-trusted, `capability:integrate`). The split is configuration, not
 code.
 
+Each of these roles carries a **published skill** that fully specifies how to perform it
+through the verbs ([ADR 0017](0017-context-clean-validation.md)) — the holder operates
+from the skill, not from ambient context. The feature gates *who may*; the skill defines
+*how*.
+
 ### Decomposition convention
 
 A **feature** is a set of `dev`-lane tasks linked by `depends_on`

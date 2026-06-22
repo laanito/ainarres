@@ -39,15 +39,24 @@ is v3+.
 4. The **owner supervises** the whole run through a human-readable surface.
 5. The feature chosen to prove all of the above **is the bare-minimum oversight tool
    itself** — the thing that lets you watch the swarm is built by the swarm.
+6. The run is **context-clean** ([ADR 0017](0017-context-clean-validation.md)): every
+   agent, frontier or worker, operates from its published role skill and the task payload
+   — never from context an orchestrating conversation happens to hold. v1's success leaned
+   on exactly that subsidy; v2's may not.
 
-If a real change reaches `main` while AINARRES coordinated every step, v2 has proven
-itself the same way v1 did: recursively and un-fakeably.
+If a real change reaches `main` while AINARRES coordinated every step — with no agent
+relying on privileged context — v2 has proven itself the same way v1 did, only this time
+honestly: recursively, un-fakeably, *and* reproducibly.
 
 ### In scope for v2 — the plumbing that makes self-development possible
 
 - **Real development workflow as data** ([ADR 0016](0016-development-workflow.md)): stages
   and transitions encoding change → test → integrate → validate, with reject-for-rework;
   functional roles (designer/implementer/reviewer/integrator) as features.
+- **Published role skills** ([ADR 0017](0017-context-clean-validation.md)): a self-
+  sufficient skill (+ opencode agent) per role, so any fresh agent can perform it from the
+  skill alone. This is what removes v1's hidden-context subsidy and makes the run a valid
+  proof, not just a successful one.
 - **Minimal task dependencies** ([ADR 0014](0014-task-dependencies.md)): a task declares
   prerequisite task(s) and is not claimable until they are satisfied — enough to order
   one real feature's work items.
@@ -88,6 +97,11 @@ Dogfooding flips on **as early as it is feasible** — the moment the plumbing c
 task, we prefer to develop the remaining work *on* AINARRES. The final milestone (the
 oversight tool) is the **fully-on-AINARRES** proof and the gate. We keep this honest: the
 retro for each milestone states how much of it ran on AINARRES versus by hand.
+
+Before the gate, a **context-clean rehearsal** ([ADR 0017](0017-context-clean-validation.md))
+runs a throwaway feature driven only by the role skills, to confirm cleanliness cheaply.
+Context gaps are closed by enriching a skill, never by hand-holding — the gaps are the
+finding.
 
 ## Alternatives considered
 

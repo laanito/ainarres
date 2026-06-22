@@ -2,8 +2,10 @@
 
 > Scope and the success gate are fixed by [ADR 0013](../decisions/0013-v2-scope-self-development.md);
 > the net-new mechanisms by [ADR 0014](../decisions/0014-task-dependencies.md) (dependencies),
-> [ADR 0015](../decisions/0015-egress-as-capability.md) (egress-as-capability), and
-> [ADR 0016](../decisions/0016-development-workflow.md) (the dev workflow). Each milestone is
+> [ADR 0015](../decisions/0015-egress-as-capability.md) (egress-as-capability),
+> [ADR 0016](../decisions/0016-development-workflow.md) (the dev workflow), and
+> [ADR 0017](../decisions/0017-context-clean-validation.md) (context-clean validation via
+> role skills). Each milestone is
 > one PR-sized slice that ends green, then gets a blog article. The within-milestone loop is
 > still **change → test → integrate → validate**, iterated until all tests pass *before*
 > committing.
@@ -20,7 +22,9 @@ a real merged PR, with the owner supervising and zero out-of-band coordination.
 A real feature is decomposed into dependent `dev`-lane tasks; agents `claim`/`advance`
 them through `proposed → … → done`; the integrate stage produces a real merged PR via an
 agent holding `capability:integrate`; work product is in git; the owner oversees via the
-new tool. Reached at **M10**.
+new tool; and the run is **context-clean** — every agent driven only by its published role
+skill + the task payload ([ADR 0017](../decisions/0017-context-clean-validation.md)).
+Reached at **M11**.
 
 ## Execution discipline
 
@@ -41,10 +45,11 @@ new tool. Reached at **M10**.
 ## Dependency order
 
 ```
-M7 dependencies ─▶ M8 egress-as-capability ─▶ M9 dev workflow + ergonomics + docs ─▶ M10 bootstrap (gate)
+M7 dependencies ─▶ M8 egress-as-capability ─▶ M9 dev workflow + ergonomics + docs ─▶ M10 role skills + clean rehearsal ─▶ M11 bootstrap (gate)
 ```
 M7 and M8 are independent of each other in principle, but M7 first keeps the schema change
-ahead of the feature work. M9 needs both. M10 needs all three.
+ahead of the feature work. M9 needs both. M10 needs the workflow + roles from M9. M11
+needs all of it — and M11 is only valid because M10 proved the run is context-clean.
 
 ---
 
@@ -128,7 +133,40 @@ ergonomic. ([ADR 0016](../decisions/0016-development-workflow.md))
 
 **Blog:** "Teaching AINARRES its own development loop."
 
-## M10 — Bootstrap: build the oversight tool on AINARRES (success gate)
+## M10 — Role skills + context-clean rehearsal
+
+**Goal:** make every role performable from a published skill alone, and prove a run is
+context-clean *before* spending the real gate.
+([ADR 0017](../decisions/0017-context-clean-validation.md))
+
+**Steps**
+- Author a self-sufficient skill (+ `.opencode/` agent) per role: **designer**
+  (decompose → `create_task` with `depends_on`, write payloads downstream roles can act on
+  with no outside context), **implementer** (branch, code + tests, self-validate, artifact,
+  advance), **reviewer** (inspect diff, run tests, advance/reject with reason),
+  **integrator** (push + `gh pr create` + merge, record PR/commit artifacts; needs
+  `capability:integrate`). Each skill covers the claim loop, envelope/error handling,
+  `lease_lost` recovery, and heartbeat cadence.
+- Reuse the M6b pattern (Anthropic-style skill frontmatter discoverable by opencode; agent
+  def pinning the loop in context for small models).
+- **Context-clean rehearsal:** run a throwaway feature end-to-end driven *only* by the
+  skills + task payloads — fresh agent instances (including a fresh frontier instance,
+  e.g. a subagent given only the skill), no hand-holding from the orchestrating session.
+- Log every context gap; close each by **editing a skill or a payload**, never by
+  hand-holding; re-run until the throwaway feature completes clean.
+
+**Done-tests**
+- A fresh worker instance, given only the implementer skill + token, claims and completes
+  an implement task; a fresh reviewer instance reviews it; a fresh integrator opens the PR
+  — none relying on this conversation's context.
+- A fresh frontier instance, given only the designer skill, decomposes a feature into
+  correctly-ordered dependent tasks.
+- The rehearsal feature reaches `done` with zero hand-holding interventions in the final
+  pass; the gap log shows what was added to the skills to get there.
+
+**Blog:** "No cheating: agents that work from a skill, not a memory."
+
+## M11 — Bootstrap: build the oversight tool on AINARRES (success gate)
 
 **Goal:** prove [ADR 0013](../decisions/0013-v2-scope-self-development.md) — ship a real
 feature as an AINARRES project.
@@ -136,18 +174,22 @@ feature as an AINARRES project.
 **Steps**
 - Decide the oversight tool's form (lean toward a non-interactive `ainarres status`
   dashboard or a small read-only TUI over the board/feed/abandoned + dependency view).
-- As a **frontier (designer) agent**, decompose it into `dev`-lane tasks with `depends_on`
-  edges (design → implement → tests → docs), all via `create_task`.
-- Run the feature on AINARRES: worker agent(s) claim and implement; the frontier reviews;
-  an integrator agent opens and merges the PR; post-merge validation advances to `done` —
-  **entirely through the verbs**.
-- The owner supervises the run using the very tool being built (once partially landed) and
-  the existing views; intervenes via `block`/`unblock` if needed.
+- A fresh **designer** agent (M10 skill, no privileged context) decomposes it into
+  `dev`-lane tasks with `depends_on` edges (design → implement → tests → docs), all via
+  `create_task`.
+- Run the feature on AINARRES with the M10 skills: fresh worker(s) claim and implement; a
+  fresh reviewer reviews; a fresh integrator opens and merges the PR; post-merge validation
+  advances to `done` — **entirely through the verbs**, no hand-holding.
+- The owner supervises using the very tool being built (once partially landed) and the
+  existing views; intervenes via `block`/`unblock` if needed (oversight, not design input).
 
 **Done-tests / success gate**
 - A real feature reaches `done` with its tasks having traversed the dev workflow via the
   verbs, ordered by dependencies, with a **real merged PR** and work product in git.
 - No row was hand-edited; no coordination happened outside AINARRES.
+- **Context-clean** ([ADR 0017](../decisions/0017-context-clean-validation.md)): every
+  agent ran from its skill + task payload only; the retro lists any context gaps and
+  confirms each was closed in a skill/payload, not by hand-holding.
 - The board/feed show the journey; the owner oversaw it; the retro records the
   on-AINARRES-vs-by-hand split honestly.
 
