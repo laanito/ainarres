@@ -119,6 +119,9 @@ const COMMANDS = {
     if (values.validate) payload.validate = values.validate;
     const body = { lane_key: values.lane, payload, priority: values.priority ? Number(values.priority) : 0 };
     if (values.subject) body.subject = values.subject;
+    if (values["depends-on"]) {
+      body.depends_on = values["depends-on"].split(",").map((s) => s.trim()).filter(Boolean);
+    }
     return callVerb("create_task", body, token);
   },
 
@@ -163,7 +166,7 @@ const COMMANDS = {
 
 // Options each verb/view command accepts (token is global).
 const OPTS = {
-  create: { lane: { type: "string" }, instructions: { type: "string" }, entry: { type: "string" }, validate: { type: "string" }, payload: { type: "string" }, priority: { type: "string" }, subject: { type: "string" }, token: { type: "string" } },
+  create: { lane: { type: "string" }, instructions: { type: "string" }, entry: { type: "string" }, validate: { type: "string" }, payload: { type: "string" }, priority: { type: "string" }, subject: { type: "string" }, "depends-on": { type: "string" }, token: { type: "string" } },
   claim: { lane: { type: "string" }, token: { type: "string" } },
   progress: { note: { type: "string" }, artifact: { type: "string", multiple: true }, token: { type: "string" } },
   advance: { to: { type: "string" }, note: { type: "string" }, artifact: { type: "string", multiple: true }, token: { type: "string" } },
@@ -180,7 +183,7 @@ const OPTS = {
 const USAGE = `ainarres — agent CLI (verbs over PostgREST)
 
   token   --family F --role R --features a,b [--sub S] [--ttl 900]
-  create  --lane L [--instructions T --entry F --validate CMD | --payload JSON] [--priority N] [--subject UUID]
+  create  --lane L [--instructions T --entry F --validate CMD | --payload JSON] [--priority N] [--subject UUID] [--depends-on ID,ID]
   claim   [--lane L]
   progress  <task-id> [--note T] [--artifact PATH ...]
   advance   <task-id> --to STAGE [--note T] [--artifact PATH ...]
