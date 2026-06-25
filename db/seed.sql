@@ -185,4 +185,20 @@ join app.features ft on ft.name = any (array['lane:snippets', 'role:worker'])
 where f.key = 'opencode+qwen3.6'
 on conflict (family_id, feature_id) do nothing;
 
+-- ── M8: egress capability (ADR 0015) ─────────────────────────────────────────
+-- Pushing to git / opening a PR is a GATED feature, not an ambient power: a family
+-- can be allowed to code but not push, which makes it ineligible for an `integrate`
+-- transition (the substrate decides who may touch the outside world). The dev
+-- workflow that consumes this feature arrives in M9; here we seed the feature and
+-- grant it to the frontier family, which plays the integrator role.
+insert into app.features (kind, key) values ('capability', 'integrate')
+on conflict (kind, key) do nothing;
+
+insert into app.family_features (family_id, feature_id)
+select f.id, ft.id
+from app.agent_families f
+join app.features ft on ft.name = 'capability:integrate'
+where f.key = 'claude-code+opus'
+on conflict (family_id, feature_id) do nothing;
+
 commit;
