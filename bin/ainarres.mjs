@@ -81,7 +81,15 @@ function args(rest, options) {
   return parseArgs({ args: rest, options, allowPositionals: true });
 }
 
-const artifactsOf = (vals) => (vals.artifact ?? []).map((path) => ({ type: "file", path }));
+// Artifacts are references, never content (ADR 0003). --artifact carries files;
+// --pr/--branch/--commit carry egress references for the integrate stage (ADR 0015).
+function artifactsOf(vals) {
+  const arts = (vals.artifact ?? []).map((path) => ({ type: "file", path }));
+  if (vals.pr) arts.push({ type: "pr", url: vals.pr });
+  if (vals.branch) arts.push({ type: "branch", name: vals.branch });
+  if (vals.commit) arts.push({ type: "commit", sha: vals.commit });
+  return arts;
+}
 
 // Send a verb call and print its envelope (exit 1 on ok:false).
 async function callVerb(name, body, token) {
@@ -168,9 +176,9 @@ const COMMANDS = {
 const OPTS = {
   create: { lane: { type: "string" }, instructions: { type: "string" }, entry: { type: "string" }, validate: { type: "string" }, payload: { type: "string" }, priority: { type: "string" }, subject: { type: "string" }, "depends-on": { type: "string" }, token: { type: "string" } },
   claim: { lane: { type: "string" }, token: { type: "string" } },
-  progress: { note: { type: "string" }, artifact: { type: "string", multiple: true }, token: { type: "string" } },
-  advance: { to: { type: "string" }, note: { type: "string" }, artifact: { type: "string", multiple: true }, token: { type: "string" } },
-  reject: { to: { type: "string" }, reason: { type: "string" }, artifact: { type: "string", multiple: true }, token: { type: "string" } },
+  progress: { note: { type: "string" }, artifact: { type: "string", multiple: true }, pr: { type: "string" }, branch: { type: "string" }, commit: { type: "string" }, token: { type: "string" } },
+  advance: { to: { type: "string" }, note: { type: "string" }, artifact: { type: "string", multiple: true }, pr: { type: "string" }, branch: { type: "string" }, commit: { type: "string" }, token: { type: "string" } },
+  reject: { to: { type: "string" }, reason: { type: "string" }, artifact: { type: "string", multiple: true }, pr: { type: "string" }, branch: { type: "string" }, commit: { type: "string" }, token: { type: "string" } },
   release: { reason: { type: "string" }, token: { type: "string" } },
   block: { reason: { type: "string" }, token: { type: "string" } },
   unblock: { note: { type: "string" }, token: { type: "string" } },
@@ -185,8 +193,8 @@ const USAGE = `ainarres — agent CLI (verbs over PostgREST)
   token   --family F --role R --features a,b [--sub S] [--ttl 900]
   create  --lane L [--instructions T --entry F --validate CMD | --payload JSON] [--priority N] [--subject UUID] [--depends-on ID,ID]
   claim   [--lane L]
-  progress  <task-id> [--note T] [--artifact PATH ...]
-  advance   <task-id> --to STAGE [--note T] [--artifact PATH ...]
+  progress  <task-id> [--note T] [--artifact PATH ...] [--pr URL --branch NAME --commit SHA]
+  advance   <task-id> --to STAGE [--note T] [--artifact PATH ...] [--pr URL --branch NAME --commit SHA]
   reject    <task-id> --to STAGE --reason T [--artifact PATH ...]
   release   <task-id> [--reason T]
   block     <task-id> --reason T
