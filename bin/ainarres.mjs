@@ -147,7 +147,34 @@ const COMMANDS = {
   release: (rest, values, token, id) => callVerb("release_task", { task_id: id, reason: values.reason ?? null }, token),
   block: (rest, values, token, id) => callVerb("block_task", { task_id: id, reason: values.reason ?? "" }, token),
   unblock: (rest, values, token, id) => callVerb("unblock_task", { task_id: id, note: values.note ?? null }, token),
-  heartbeat: (rest, values, token, id) => callVerb("heartbeat", { task_id: id }, token),
+
+  // Single heartbeat, or a BOUNDED auto-heartbeat (--watch): renew the lease every
+  // --interval seconds until --max seconds have elapsed, then stop on our own. The
+  // bound is the safety: a forgotten/orphaned watcher can't hold a lease forever —
+  // once it stops, the lease expires and the task is reclaimable (ADR 0009). Stops
+  // immediately if a renewal comes back not-ok (e.g. lease_lost).
+  async heartbeat(rest, values, token, id) {
+    if (!values.watch) return callVerb("heartbeat", { task_id: id }, token);
+    const interval = values.interval ? Number(values.interval) : 60;
+    const max = values.max ? Number(values.max) : 3600;
+    const started = Date.now();
+    let beats = 0;
+    for (;;) {
+      const r = await rpc("heartbeat", { task_id: id }, token);
+      const env = r.body && typeof r.body === "object" ? r.body : { ok: r.httpOk };
+      if (env.ok !== true) {
+        emit(env, false); // lease_lost / not_found / etc — stop the watcher
+        return;
+      }
+      beats += 1;
+      const elapsed = (Date.now() - started) / 1000;
+      if (elapsed + interval > max) {
+        emit({ ok: true, code: "ok", watched: true, beats, elapsed: Math.round(elapsed) });
+        return;
+      }
+      await new Promise((res) => setTimeout(res, interval * 1000));
+    }
+  },
 
   async board(rest, values, token) {
     const q = new URLSearchParams();
@@ -182,7 +209,7 @@ const OPTS = {
   release: { reason: { type: "string" }, token: { type: "string" } },
   block: { reason: { type: "string" }, token: { type: "string" } },
   unblock: { note: { type: "string" }, token: { type: "string" } },
-  heartbeat: { token: { type: "string" } },
+  heartbeat: { watch: { type: "boolean" }, interval: { type: "string" }, max: { type: "string" }, token: { type: "string" } },
   board: { lane: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
   feed: { lane: { type: "string" }, task: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
   abandoned: { lane: { type: "string" }, token: { type: "string" } },
@@ -199,7 +226,7 @@ const USAGE = `ainarres — agent CLI (verbs over PostgREST)
   release   <task-id> [--reason T]
   block     <task-id> --reason T
   unblock   <task-id> [--note T]
-  heartbeat <task-id>
+  heartbeat <task-id> [--watch --interval 60 --max 3600]
   board | feed | abandoned [--lane L] [--task UUID] [--limit N]
 
 env: AINARRES_BASE_URL, JWT_SECRET (token), AINARRES_TOKEN (bearer; --token overrides)`;
