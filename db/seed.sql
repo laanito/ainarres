@@ -201,4 +201,99 @@ join app.features ft on ft.name = 'capability:integrate'
 where f.key = 'claude-code+opus'
 on conflict (family_id, feature_id) do nothing;
 
+-- ── M9: the AINARRES development workflow (ADR 0016) ──────────────────────────
+-- The real loop, as data: change → test → integrate → validate, with rework. This
+-- is the workflow AINARRES's own development runs on (ADR 0013). A feature is a set
+-- of dev-lane tasks linked by depends_on (M7/ADR 0014); each task traverses these
+-- stages. Functional roles are features on the transitions out of each stage; lane
+-- membership (lane:dev) is enforced separately by the verbs.
+
+-- The dev lane membership feature + the role vocabulary the workflow routes by
+-- (role:reviewer and capability:integrate already exist).
+insert into app.features (kind, key) values
+  ('lane', 'dev'),
+  ('role', 'designer'), ('role', 'implementer'), ('role', 'integrator')
+on conflict (kind, key) do nothing;
+
+-- Generous, stage-appropriate leases (real work runs minutes-to-hours, not ms);
+-- bounded auto-heartbeat keeps a healthy long task from being reclaimed (ADR 0009).
+insert into app.workflows (key, description, default_lease, default_max_attempts) values
+  ('ainarres-dev', 'AINARRES self-development: change → test → integrate → validate, with rework.',
+   interval '30 minutes', 3)
+on conflict (key) do nothing;
+
+-- proposed (initial) → designing → implementing → reviewing → integrating →
+-- validating → done (the single terminal stage; failures rework, never go terminal).
+insert into app.stages (workflow_id, key, ordering, is_initial, is_terminal, lease_duration)
+select w.id, v.key, v.ord, v.ini, v.term, v.lease
+from app.workflows w
+cross join (values
+  ('proposed',    0, true,  false, null::interval),
+  ('designing',   1, false, false, interval '1 hour'),
+  ('implementing',2, false, false, interval '2 hours'),
+  ('reviewing',   3, false, false, interval '1 hour'),
+  ('integrating', 4, false, false, interval '30 minutes'),
+  ('validating',  5, false, false, interval '30 minutes'),
+  ('done',        6, false, true,  null::interval)
+) as v(key, ord, ini, term, lease)
+where w.key = 'ainarres-dev'
+on conflict (workflow_id, key) do nothing;
+
+-- Advance transitions, each gated by the role that owns that step. The
+-- integrate step additionally requires capability:integrate (ADR 0015): only a
+-- push-trusted family can open/merge the PR.
+insert into app.transitions (workflow_id, from_stage, to_stage, kind, required_features)
+select w.id, sf.id, st.id, 'advance', v.req
+from app.workflows w
+cross join (values
+  ('proposed',    'designing',   array['role:designer']),
+  ('designing',   'implementing',array['role:designer']),
+  ('implementing','reviewing',   array['role:implementer']),
+  ('reviewing',   'integrating', array['role:reviewer']),
+  ('integrating', 'validating',  array['role:integrator','capability:integrate']),
+  ('validating',  'done',        array['role:reviewer'])
+) as v(from_key, to_key, req)
+join app.stages sf on sf.workflow_id = w.id and sf.key = v.from_key
+join app.stages st on st.workflow_id = w.id and st.key = v.to_key
+where w.key = 'ainarres-dev'
+  and not exists (select 1 from app.transitions t
+    where t.workflow_id = w.id and t.from_stage = sf.id and t.to_stage = st.id and t.kind = 'advance');
+
+-- Reject (rework) transitions: send work back to implementing. Separately gated.
+insert into app.transitions (workflow_id, from_stage, to_stage, kind, required_features)
+select w.id, sf.id, st.id, 'reject', v.req
+from app.workflows w
+cross join (values
+  ('reviewing',  'implementing', array['role:reviewer']),
+  ('validating', 'implementing', array['role:reviewer']),
+  ('integrating','implementing', array['role:integrator','capability:integrate'])
+) as v(from_key, to_key, req)
+join app.stages sf on sf.workflow_id = w.id and sf.key = v.from_key
+join app.stages st on st.workflow_id = w.id and st.key = v.to_key
+where w.key = 'ainarres-dev'
+  and not exists (select 1 from app.transitions t
+    where t.workflow_id = w.id and t.from_stage = sf.id and t.to_stage = st.id and t.kind = 'reject');
+
+insert into app.lanes (project_id, key, workflow_id, context)
+select p.id, 'dev', w.id, '{"repo": "https://github.com/laanito/ainarres"}'::jsonb
+from app.projects p, app.workflows w
+where p.slug = 'ainarres' and w.key = 'ainarres-dev'
+on conflict (project_id, key) do nothing;
+
+-- Real families on the dev lane: the frontier plays designer/reviewer/integrator
+-- (and holds capability:integrate, granted above); the worker model implements.
+insert into app.family_features (family_id, feature_id)
+select f.id, ft.id
+from app.agent_families f
+join app.features ft on ft.name = any (array['lane:dev', 'role:designer', 'role:integrator'])
+where f.key = 'claude-code+opus'
+on conflict (family_id, feature_id) do nothing;
+
+insert into app.family_features (family_id, feature_id)
+select f.id, ft.id
+from app.agent_families f
+join app.features ft on ft.name = any (array['lane:dev', 'role:implementer'])
+where f.key = 'opencode+qwen3.6'
+on conflict (family_id, feature_id) do nothing;
+
 commit;

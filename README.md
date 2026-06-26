@@ -40,9 +40,12 @@ the canonical Postgres job-queue pattern. Two agents asking at the same instant 
 two different tasks. No coordination layer required — which is what makes
 "no orchestrator" honest rather than aspirational.
 
-**Crashed agents self-heal.** Every claim sets a lease. A `pg_cron` job inside the
-database returns expired leases to the queue, so a dead agent can't hold work forever.
-The recovery mechanism runs *in* Postgres — still no external process.
+**Crashed agents self-heal.** Every claim sets a lease. Recovery is **lazy reclaim**:
+a task whose lease has expired is simply available again to the next `claim_next_task`,
+discovered under the same `FOR UPDATE SKIP LOCKED`. There is *no* background process —
+asking for the next task *is* the recovery mechanism, which is the strongest form of
+"no orchestrator." A returning dead agent is locked out by the lease check
+(`code:"lease_lost"`); a task that burns through `max_attempts` auto-blocks for a human.
 
 **Capabilities are tamper-proof.** Agents authenticate with a JWT whose claims carry
 their role, capabilities, and work-areas. The claim function filters against those
@@ -73,17 +76,27 @@ an event.
         │   claim / advance      tasks · events        │
         │   the state machine    transitions · artifacts│
         │                                             │
-        │   pg_cron reaper — returns expired leases    │
+        │   lazy reclaim — recovery is the claim path  │
         └───────────────────────────────────────────┘
 ```
 
-One database, one stateless HTTP layer in front of it. That's the entire stack.
+One database, one stateless HTTP layer in front of it. That's the entire stack — stock
+`postgres:18` + PostgREST, no extensions, no background processes.
 
 ## Status
 
-Early. The schema and the core verbs exist; the transition model and the human board
-are in flux. Expect breaking changes. This README describes intent as much as it
-describes what runs today.
+**v1 is complete and self-hosting.** The data model, HS256 auth with effective features
+(token grant − family denials), the nine verbs over a uniform envelope, race-free
+`claim_next_task`, lazy-reclaim recovery, and the oversight views all run in a
+dockerized teardown/rebuild loop. The success bar was met on 2026-06-19: a real agent
+(`opencode + qwen3.6`) carried coding tasks end to end through the verbs with a Claude
+reviewer accepting — AINARRES can host its own work.
+
+**v2 is in progress:** developing AINARRES *within* AINARRES. Task dependencies, egress
+as a gated capability, the real development workflow as data, worker ergonomics, and a
+bare-minimum oversight tool — built and dogfooded on the substrate itself. See
+[`.agents/`](.agents/) for the decisions (ADRs), plans, and per-milestone retros — the
+single source of truth, written to be read by humans and agents alike.
 
 ## Quickstart (local)
 
@@ -96,9 +109,11 @@ cd ainarres
 docker compose up
 ```
 
-This brings up PostgreSQL (with the schema, RPC functions, and the `pg_cron` reaper
-loaded) and PostgREST on `localhost:3000`. Point a local agent or model at it and
-have it pull work; open the board to watch.
+This brings up PostgreSQL (schema + RPC functions, migrated by a one-shot `migrate`
+service) and PostgREST on `localhost:3010`. Point a local agent at it with the
+[`ainarres` CLI](bin/ainarres.mjs) — the dependency-free agent surface — and have it
+pull work; read the board/feed views to watch. `make reset` runs the full
+teardown→rebuild→seed→test loop.
 
 > A connection pooler (PgBouncer, transaction mode) sits in front of the writer in
 > any non-toy deployment — a herd of agents will otherwise exhaust Postgres'
@@ -106,18 +121,18 @@ have it pull work; open the board to watch.
 
 ## Writing the logic
 
-Workflow logic is not limited to PL/pgSQL. Anything Postgres can host is fair game:
+The verbs are written in **`plpgsql`** on stock `postgres:18` — no extensions
+([ADR 0005](.agents/decisions/0005-logic-language-escalation.md): earn a dependency
+before adding it). The data-driven design means changing a workflow is editing rows
+(stages, transitions, `required_features`), not rewriting functions. Richer in-database
+languages (`plv8` for JSON-native logic; untrusted `plpython3u`/`plr` behind privileged
+roles only, never on the agent surface) remain available *if* a future slice needs them
+— but plpgsql has carried v1 and v2 so far.
 
-- **Trusted / sandboxed** (`plpgsql`, `plv8`, `plperl`, `pltcl`) — safe to expose on
-  the agent-facing surface. The six verbs live here. `plv8` is the recommended default:
-  JSON-native (tasks, capabilities, and artifacts are all JSON-shaped) and shareable
-  with JS/TS agents, so a client can dry-run the same transition check the DB enforces.
-- **Untrusted** (`plpython3u`, `plperlu`, `plr`) — full OS access. Heavy scoring or
-  anything that touches the filesystem lives here, invoked **only** by privileged roles
-  or `pg_cron`, **never** exposed through PostgREST. Keep the dangerous power behind the
-  thin trusted wrappers.
+## Roadmap: scaling
 
-## Scaling
+> The sections below describe **intended** scale-out, not what runs today. v1 and v2 are
+> deliberately **single-instance** — prove sufficiency before distribution.
 
 The crazy version is reachable — but not as a mesh of equal masters. `SKIP LOCKED` is
 race-free *within one instance only*; there is no distributed SKIP LOCKED. So:
@@ -139,15 +154,17 @@ you want a global id space across clusters regardless.
 
 ## Getting work back out
 
-Propagating to external systems (deploys, GitHub, notifications) and crossing a
-shard boundary use the same pattern: **never a synchronous dual-write.** An
-`advance_task` writes locally and drops an **outbox** row; a `LISTEN/NOTIFY` consumer
-ships it onward with retries. Eventual, not transactional, across every seam. Resist
-foreign data wrappers on the hot path — an FDW call inside the claim transaction
-couples your race-free local claim to some other system's latency.
+**Today (v2): egress is a gated capability, performed by the agent.** Opening a PR or
+pushing to git is the work of the `integrate` stage, done by an agent that holds the
+`capability:integrate` feature ([ADR 0015](.agents/decisions/0015-egress-as-capability.md));
+the substrate stores only a *reference* to the result (PR url, commit) as an artifact.
+A family can be allowed to code but not push — the substrate, not the agent, decides who
+may touch the outside world. No synchronous outbound call sits inside a verb.
 
-> `NOTIFY` is node-local and does not cross replication. In the single-writer model the
-> writer notifies; replicas don't. Plan the wake topology around that.
+**Roadmap (substrate-initiated egress):** when egress must happen independently of any
+agent (or across a shard boundary), the pattern is **never a synchronous dual-write** —
+`advance_task` drops an **outbox** row and a `LISTEN/NOTIFY` consumer ships it onward with
+retries. Resist foreign data wrappers on the hot path. (Deferred: v2 doesn't need it.)
 
 ## License
 
