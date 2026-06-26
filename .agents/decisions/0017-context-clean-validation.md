@@ -78,6 +78,28 @@ and each such gap is logged, because the gaps are the real finding.
   context is exactly the v1 subsidy we are removing; exempting it would re-introduce the
   flaw under a different name.
 
+## Operational decisions (v2 first run)
+
+The mechanism this ADR left open is now fixed for the **first** bootstrap run (M10/M11),
+with a deliberate evolution path:
+
+- **Fresh-instance mechanism — in-harness subagents first.** For the first run, a frontier
+  role (designer/reviewer/integrator) runs as an **Agent-tool subagent** seeded with only
+  its role skill + the task payload. A subagent does not carry this conversation's design
+  context — the v1 subsidy we are removing. It does share the harness system prompt and the
+  repo's `CLAUDE.md`/memory; any role that leans on those beyond its skill is logged as a
+  gap. **Next iteration:** fully independent fresh sessions (separate `claude`/`opencode`
+  processes), once the subagent run is verified.
+- **Integration — agent merges on local `gh`.** The integrator subagent performs
+  `git push` + `gh pr create` + merge on the already-authenticated local `gh`. Fully
+  hands-off, for the truest reading of the gate ([ADR 0015](0015-egress-as-capability.md)).
+- **Concurrency — serialize first.** Implementers run one at a time for the first run
+  (the bootstrap feature's tasks are largely dependency-ordered anyway). **Next iteration:**
+  per-task `git worktree` isolation to prove the concurrent-workers story.
+
+These are execution choices, not architecture; they don't change the cleanliness rule
+above. The retro records how each held up.
+
 ## Consequences
 
 - **Role skills are a first-class v2 deliverable** with their own milestone in the plan
