@@ -15,37 +15,44 @@ permissions.
 - `ainarres` runs as `node bin/ainarres.mjs` (alias it to `ainarres` if you like).
 - `AINARRES_TOKEN` is exported — it is your identity and grants (includes
   `capability:integrate`). Do not change it.
-- `AINARRES_BASE_URL` points at the substrate.
+- `AINARRES_BASE_URL` points at the substrate. Your lane is **`dev`**.
 - Your runtime is **push-trusted**: `git` has a writable remote and `gh` is
   authenticated. (Holding `capability:integrate` *asserts* this is true of where you run.)
 
 Every command prints one JSON line. **Exit 0 = `ok`, exit 1 = not ok** (read `code`/`reason`).
 
+## The dev workflow (where your work fits)
+
+`proposed → designing → implementing → reviewing → integrating → validating → done`.
+You own `integrating → validating`: a task reaches you only after a reviewer has approved
+the code. After you merge, a reviewer confirms the merge is green at `validating`.
+
 ## The loop
 
 Repeat until `claim` reports `code:"empty"`:
 
-1. **Claim** the next integrate task: `ainarres claim --lane <dev-lane>`
+1. **Claim** the next integrate task: `ainarres claim --lane dev`
    - `code:"empty"` → nothing to integrate; stop.
-   - `code:"ok"` → you hold `task`. Read `task.payload` and the task's prior artifacts
-     (`ainarres feed --task <task.id>`) to find the **branch** the implementer pushed
-     work to.
+   - `code:"ok"` → you hold a task at `integrating`. Read `task.payload` and the task's
+     artifacts (`ainarres feed --task <task.id>`) to find the **branch** the implementer
+     pushed and the reviewer approved.
 
-2. **Integrate.** Bring the branch to `main` as a real PR:
+2. **Integrate.** Bring the branch to the default branch as a real, merged PR:
    - `git push` the branch if it isn't already on the remote.
-   - `gh pr create` (title/body from the task) — capture the PR url.
-   - When CI/review is green, merge it (`gh pr merge --squash` per repo convention) —
-     capture the merge commit sha.
-   - For long operations, `ainarres heartbeat <task.id>` keeps your lease alive; a
-     `code:"lease_lost"` means you took too long — stop and re-`claim`.
+   - `gh pr create` (title/body from the task `goal`/`instructions`) — capture the PR url.
+   - When checks are green, merge it: `gh pr merge --squash --delete-branch` — capture the
+     merge commit sha.
+   - For long operations, `ainarres heartbeat <task.id> --watch --interval 60 --max 1800 &`
+     keeps your lease alive; `code:"lease_lost"` means you took too long — stop and re-`claim`.
 
-3. **Record the references and advance.** The substrate stores *references*, never the
-   diff itself (two planes — [ADR 0003](../.agents/decisions/0003-two-plane-source-of-truth.md)):
+3. **Record the references and advance to `validating`.** The substrate stores
+   *references*, never the diff itself (two planes —
+   [ADR 0003](../.agents/decisions/0003-two-plane-source-of-truth.md)):
    ```
-   ainarres advance <task.id> --to <next-stage> \
+   ainarres advance <task.id> --to validating \
      --note "merged" \
-     --pr https://github.com/<org>/<repo>/pull/<n> \
-     --branch <branch-name> \
+     --pr https://github.com/laanito/ainarres/pull/<n> \
+     --branch dev/<task.id> \
      --commit <merge-sha>
    ```
    - `code:"ok"` → done; go to step 1.
@@ -53,8 +60,8 @@ Repeat until `claim` reports `code:"empty"`:
      holding this task) — stop.
    - `code:"lease_lost"` → you lost the lease mid-work; go to step 1.
 
-4. **If you cannot integrate** (conflicts, failing CI you can't fix), send it back instead
-   of forcing it: `ainarres reject <task.id> --to <impl-stage> --reason "<why>"`.
+4. **If you cannot integrate** (conflicts, failing checks you can't fix), send it back
+   instead of forcing it: `ainarres reject <task.id> --to implementing --reason "<why>"`.
 
 ## Rules
 
