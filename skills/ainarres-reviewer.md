@@ -19,9 +19,10 @@ Every command prints one JSON line. **Exit 0 = `ok`, exit 1 = not ok** (read `co
 Repeat until `claim` reports `code:"empty"`:
 
 1. **Claim**: `ainarres claim --lane dev` → you hold a task at `reviewing` **or**
-   `validating`. Read `task.payload` (`goal`, `instructions`, `acceptance`, `validate`) and
-   the task's history for the artifacts: `ainarres feed --task <task.id>` — the implementer
-   recorded the **branch**; the integrator (later) records the **PR/commit**.
+   `validating`. Read `task.payload` (`goal`, `instructions`, `acceptance`, `validate`).
+   The implementer's branch is named by convention **`dev/<task.id>`** — that's how you
+   find the work (your agent token can't read the `feed`/`board` views; those are for
+   oversight). `git fetch` and check out `dev/<task.id>` to see the change.
 
 2. **Review for the stage you're at:**
 

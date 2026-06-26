@@ -49,16 +49,25 @@ Note each returned `task.id`. Use them as `--depends-on` for dependents.
 ### 2. Shepherd each ready task from `proposed` to `implementing`
 
 A task is "ready" once its prerequisites are `done` (the substrate won't hand you one that
-isn't). Loop until `claim` is `empty`:
+isn't). **Each pass makes ONE move, and advancing always RELEASES your hold** — so you
+re-claim between moves. The loop naturally walks a task `proposed → designing →
+implementing` across successive claims. Loop until `claim` is `empty`:
 
-1. `ainarres claim --lane dev` → you hold a task at `proposed` (or `designing`).
-2. If at **proposed**: `ainarres advance <id> --to designing --note "starting design"`.
-3. If at **designing**: make sure the payload spec is complete and unambiguous; if you
-   refined anything, record it: `ainarres progress <id> --note "<design decisions>"`. Then
-   `ainarres advance <id> --to implementing --note "spec ready"`.
+1. `ainarres claim --lane dev` → you hold a task; read `task.stage_key`.
+2. Make exactly one move for the stage you're at:
+   - at **`proposed`** → `ainarres advance <id> --to designing --note "starting design"`.
+   - at **`designing`** → make sure the payload spec is complete and unambiguous (record any
+     refinement with `ainarres progress <id> --note "<design decisions>"`), then
+     `ainarres advance <id> --to implementing --note "spec ready"`.
+3. Go back to step 1. The advance in step 2 released your hold; the next `claim` picks up
+   the next ready task — which may be the **same** task now one stage further.
 
 Once every ready task is at `implementing`, `claim` returns `empty` for you (you have no
 move on an `implementing` task) — stop. Come back when dependents become ready.
+
+> Heads-up: a normal, *successful* `advance` clears your claim (the task moves on without
+> you). That is not an error — just re-`claim` to take the next step. Don't expect to hold
+> a task across two advances.
 
 ## Rules
 
