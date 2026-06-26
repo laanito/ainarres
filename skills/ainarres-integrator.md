@@ -33,9 +33,9 @@ Repeat until `claim` reports `code:"empty"`:
 
 1. **Claim** the next integrate task: `ainarres claim --lane dev`
    - `code:"empty"` → nothing to integrate; stop.
-   - `code:"ok"` → you hold a task at `integrating`. Read `task.payload` and the task's
-     artifacts (`ainarres feed --task <task.id>`) to find the **branch** the implementer
-     pushed and the reviewer approved.
+   - `code:"ok"` → you hold a task at `integrating`. Read `task.payload`. The implementer's
+     branch is named by convention **`dev/<task.id>`** (your agent token can't read the
+     `feed`/`board` views — those are for oversight); `git fetch` it.
 
 2. **Integrate.** Bring the branch to the default branch as a real, merged PR:
    - `git push` the branch if it isn't already on the remote.
