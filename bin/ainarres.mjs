@@ -11,6 +11,7 @@
 
 import { createHmac, randomUUID } from "node:crypto";
 import { parseArgs } from "node:util";
+import { fileURLToPath } from "node:url";
 
 const BASE = (process.env.AINARRES_BASE_URL || "http://localhost:3010").replace(/\/$/, "");
 const SECRET = process.env.JWT_SECRET || "ainarres-dev-only-secret-change-me-min-32-chars";
@@ -96,6 +97,54 @@ async function callVerb(name, body, token) {
   const r = await rpc(name, body, token);
   const ok = r.body && typeof r.body === "object" ? r.body.ok : r.httpOk;
   emit(r.body ?? { ok: false, code: "http_error", status: r.status }, ok);
+}
+
+// Pure, deterministic formatter for the oversight `status` view. Takes already-
+// fetched view rows (board/feed/abandoned) and returns a one-glance multi-line
+// summary string. No I/O, no fetch, no clock — same input → same output. The
+// `status` subcommand (a follow-up task) will fetch the views and pass them here.
+export function formatStatus({ board = [], feed = [], abandoned = [] }, { lane = null, feedLimit = 10 } = {}) {
+  const lines = [];
+
+  // 1. Header.
+  lines.push(lane ? `status — lane ${lane}` : "status — all lanes");
+
+  // 2. Per-stage task summary from board.
+  if (board.length === 0) {
+    lines.push("  (no tasks)");
+  } else {
+    const byStage = new Map();
+    for (const row of board) {
+      const stage = row.stage;
+      byStage.set(stage, (byStage.get(stage) ?? 0) + 1);
+    }
+    for (const stage of [...byStage.keys()].sort()) {
+      lines.push(`  ${stage}: ${byStage.get(stage)}`);
+    }
+    lines.push(`  total: ${board.length}`);
+  }
+
+  // 3. Abandoned section.
+  lines.push(`abandoned (${abandoned.length}):`);
+  if (abandoned.length === 0) {
+    lines.push("  (none)");
+  } else {
+    for (const row of abandoned) {
+      lines.push(`  - ${row.task_id} [${row.stage}] claimed_by=${row.claimed_by}`);
+    }
+  }
+
+  // 4. Recent events — feed is already newest-first; take the first feedLimit.
+  lines.push(`recent events (showing up to ${feedLimit}):`);
+  if (feed.length === 0) {
+    lines.push("  (no events)");
+  } else {
+    for (const ev of feed.slice(0, feedLimit)) {
+      lines.push(`  - ${ev.created_at} ${ev.type} ${ev.task_id} by ${ev.actor}`);
+    }
+  }
+
+  return lines.join("\n");
 }
 
 const COMMANDS = {
@@ -197,6 +246,32 @@ const COMMANDS = {
     const r = await restGet(`abandoned?${q}`, token);
     emit(r.body, r.httpOk);
   },
+
+  // One-glance oversight summary: fetch board/feed/abandoned views in parallel and
+  // hand the rows to the pure formatStatus(). Prints HUMAN TEXT (not JSON). Needs an
+  // oversight-capable token at runtime (the views are granted to the oversight role);
+  // a non-oversight token gets a PostgREST 401/403 → JSON error envelope + exit 1.
+  async status(rest, values, token) {
+    const lane = values.lane ?? null;
+    const laneFilter = (q) => { if (lane) q.set("lane", `eq.${lane}`); return q; };
+    const feedLimit = values.limit ? Number(values.limit) : 10;
+    const boardQ = laneFilter(new URLSearchParams());
+    const feedQ = laneFilter(new URLSearchParams()); feedQ.set("limit", String(feedLimit));
+    const abandQ = laneFilter(new URLSearchParams());
+    const [b, f, a] = await Promise.all([
+      restGet(`board?${boardQ}`, token),
+      restGet(`feed?${feedQ}`, token),
+      restGet(`abandoned?${abandQ}`, token),
+    ]);
+    for (const r of [b, f, a]) {
+      if (!r.httpOk) { emit(r.body ?? { ok: false, code: "http_error", status: r.status }, false); return; }
+    }
+    const summary = formatStatus(
+      { board: b.body, feed: f.body, abandoned: a.body },
+      { lane, feedLimit },
+    );
+    process.stdout.write(`${summary}\n`);
+  },
 };
 
 // Options each verb/view command accepts (token is global).
@@ -213,6 +288,7 @@ const OPTS = {
   board: { lane: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
   feed: { lane: { type: "string" }, task: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
   abandoned: { lane: { type: "string" }, token: { type: "string" } },
+  status: { lane: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
 };
 
 const USAGE = `ainarres — agent CLI (verbs over PostgREST)
@@ -228,23 +304,30 @@ const USAGE = `ainarres — agent CLI (verbs over PostgREST)
   unblock   <task-id> [--note T]
   heartbeat <task-id> [--watch --interval 60 --max 3600]
   board | feed | abandoned [--lane L] [--task UUID] [--limit N]
+  status  [--lane L] [--limit N]   one-glance oversight summary (board + abandoned + recent feed)
 
 env: AINARRES_BASE_URL, JWT_SECRET (token), AINARRES_TOKEN (bearer; --token overrides)`;
 
-const [, , cmd, ...rest] = process.argv;
+// Only run the CLI when executed directly (`node bin/ainarres.mjs …`), not when
+// imported (e.g. by a unit test that exercises the pure helpers above).
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 
-if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
-  process.stdout.write(`${USAGE}\n`);
-  process.exit(cmd ? 0 : 1);
-}
-if (!COMMANDS[cmd]) fail(`unknown command '${cmd}'. Try 'ainarres help'.`);
+if (isMain) {
+  const [, , cmd, ...rest] = process.argv;
 
-if (cmd === "token") {
-  COMMANDS.token(rest);
-} else {
-  const { values, positionals } = args(rest, OPTS[cmd]);
-  const token = bearer(values);
-  const needsToken = !["token"].includes(cmd);
-  if (needsToken && !token) fail(`${cmd}: no token (set AINARRES_TOKEN or pass --token)`);
-  await COMMANDS[cmd](rest, values, token, positionals[0]);
+  if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
+    process.stdout.write(`${USAGE}\n`);
+    process.exit(cmd ? 0 : 1);
+  }
+  if (!COMMANDS[cmd]) fail(`unknown command '${cmd}'. Try 'ainarres help'.`);
+
+  if (cmd === "token") {
+    COMMANDS.token(rest);
+  } else {
+    const { values, positionals } = args(rest, OPTS[cmd]);
+    const token = bearer(values);
+    const needsToken = !["token"].includes(cmd);
+    if (needsToken && !token) fail(`${cmd}: no token (set AINARRES_TOKEN or pass --token)`);
+    await COMMANDS[cmd](rest, values, token, positionals[0]);
+  }
 }
