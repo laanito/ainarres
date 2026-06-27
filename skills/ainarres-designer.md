@@ -74,6 +74,10 @@ move on an `implementing` task) — stop. Come back when dependents become ready
 - **No outside context.** The implementer/reviewer get only the task. If your `validate`
   command or `instructions` assume something unstated, the task is under-specified — fix it.
 - **One task at a time.** `already_holding` → finish or `release` what you hold.
-- **`validate` must be runnable and decisive** — it is how the implementer self-checks and
-  the reviewer independently verifies. Prefer `make test` or a small `node -e` assertion.
+- **`validate` must be runnable, decisive, and substrate-free** — it is how the implementer
+  self-checks and the reviewer independently verifies. Make it a *targeted* check (a specific
+  unit test, or a `node --check` / `node -e` assertion) that runs WITHOUT a live substrate.
+  **Do NOT make `validate` the whole test suite:** dev tasks share one live substrate, and a
+  full suite's DB-backed fixtures corrupt the other lanes' state. Full-suite regression is the
+  **`validating`** stage's job (a clean rebuild on `main`), not the per-task check.
 - **Don't fight the lease.** `lease_lost` → re-`claim`.

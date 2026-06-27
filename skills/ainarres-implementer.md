@@ -48,6 +48,9 @@ Repeat until `claim` reports `code:"empty"`:
   The reviewer and integrator find your work through that reference — always record it.
 - **Validate before you advance.** Never hand review something whose `validate` you haven't
   watched exit 0.
+- **Write only inside the repository.** Create and edit files at the **exact paths the task
+  names**, within the repo — never `/tmp` or anywhere outside the project. The work product
+  is the change on your branch; scratch files outside the repo aren't part of it.
 - **One task at a time.** `already_holding` → finish or `release` first.
 - **Stay in your lane and your stage.** If `claim` returns `empty`, there's nothing at
   `implementing` for you — stop (or wait and retry).

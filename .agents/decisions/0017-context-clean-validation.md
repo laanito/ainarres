@@ -83,19 +83,28 @@ and each such gap is logged, because the gaps are the real finding.
 The mechanism this ADR left open is now fixed for the **first** bootstrap run (M10/M11),
 with a deliberate evolution path:
 
-- **Fresh-instance mechanism — in-harness subagents first.** For the first run, a frontier
-  role (designer/reviewer/integrator) runs as an **Agent-tool subagent** seeded with only
-  its role skill + the task payload. A subagent does not carry this conversation's design
-  context — the v1 subsidy we are removing. It does share the harness system prompt and the
-  repo's `CLAUDE.md`/memory; any role that leans on those beyond its skill is logged as a
-  gap. **Next iteration:** fully independent fresh sessions (separate `claude`/`opencode`
-  processes), once the subagent run is verified.
-- **Integration — agent merges on local `gh`.** The integrator subagent performs
-  `git push` + `gh pr create` + merge on the already-authenticated local `gh`. Fully
-  hands-off, for the truest reading of the gate ([ADR 0015](0015-egress-as-capability.md)).
+- **Designer / reviewer — in-harness subagents (Claude Code).** These roles don't merge, so
+  the company policy is no obstacle. Each runs as an **Agent-tool subagent** seeded with only
+  its role skill + the task payload — no carry-over of this conversation's design context
+  (the v1 subsidy we are removing). It shares the harness system prompt + repo
+  `CLAUDE.md`/memory; any role leaning on those beyond its skill is logged as a gap.
+- **Implementer — `opencode + qwen3.6`.** A local worker harness; coding + `git push` are not
+  policy-gated, so the orchestrator may spawn it.
+- **Integrator — `grok` (grok-build), invoked INDEPENDENTLY.** This is the load-bearing
+  finding from the M10 rehearsal + smoke-test: the actual `git push`-merge is **company-deny-
+  gated for Claude Code**, and the orchestrator **cannot launder it through a spawned
+  sub-harness** — the auto-mode guard correctly blocks "spawn grok `--always-approve` to run
+  the denied command" as a bypass. So the merge-capable agent must run on a harness *outside*
+  the orchestrator's control: the **grok** harness (its own managed config permits the merge),
+  started by the owner (or a standing poller), claiming `integrating` tasks and merging on its
+  own. `capability:integrate` therefore lives **only** on the `grok+grok-build` family — never
+  on `claude-code+opus`, which can't merge. This is not a workaround; it is the correct
+  security boundary, and it makes the integrator a genuinely independent agent — closer to the
+  federation end-state ([ADR 0013](0013-v2-scope-self-development.md)) than a subprocess would be.
 - **Concurrency — serialize first.** Implementers run one at a time for the first run
   (the bootstrap feature's tasks are largely dependency-ordered anyway). **Next iteration:**
-  per-task `git worktree` isolation to prove the concurrent-workers story.
+  per-task `git worktree` isolation (grok has native `--worktree` support) to prove the
+  concurrent-workers story.
 
 These are execution choices, not architecture; they don't change the cleanliness rule
 above. The retro records how each held up.
