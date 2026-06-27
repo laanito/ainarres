@@ -246,6 +246,32 @@ const COMMANDS = {
     const r = await restGet(`abandoned?${q}`, token);
     emit(r.body, r.httpOk);
   },
+
+  // One-glance oversight summary: fetch board/feed/abandoned views in parallel and
+  // hand the rows to the pure formatStatus(). Prints HUMAN TEXT (not JSON). Needs an
+  // oversight-capable token at runtime (the views are granted to the oversight role);
+  // a non-oversight token gets a PostgREST 401/403 → JSON error envelope + exit 1.
+  async status(rest, values, token) {
+    const lane = values.lane ?? null;
+    const laneFilter = (q) => { if (lane) q.set("lane", `eq.${lane}`); return q; };
+    const feedLimit = values.limit ? Number(values.limit) : 10;
+    const boardQ = laneFilter(new URLSearchParams());
+    const feedQ = laneFilter(new URLSearchParams()); feedQ.set("limit", String(feedLimit));
+    const abandQ = laneFilter(new URLSearchParams());
+    const [b, f, a] = await Promise.all([
+      restGet(`board?${boardQ}`, token),
+      restGet(`feed?${feedQ}`, token),
+      restGet(`abandoned?${abandQ}`, token),
+    ]);
+    for (const r of [b, f, a]) {
+      if (!r.httpOk) { emit(r.body ?? { ok: false, code: "http_error", status: r.status }, false); return; }
+    }
+    const summary = formatStatus(
+      { board: b.body, feed: f.body, abandoned: a.body },
+      { lane, feedLimit },
+    );
+    process.stdout.write(`${summary}\n`);
+  },
 };
 
 // Options each verb/view command accepts (token is global).
@@ -262,6 +288,7 @@ const OPTS = {
   board: { lane: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
   feed: { lane: { type: "string" }, task: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
   abandoned: { lane: { type: "string" }, token: { type: "string" } },
+  status: { lane: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
 };
 
 const USAGE = `ainarres — agent CLI (verbs over PostgREST)
@@ -277,6 +304,7 @@ const USAGE = `ainarres — agent CLI (verbs over PostgREST)
   unblock   <task-id> [--note T]
   heartbeat <task-id> [--watch --interval 60 --max 3600]
   board | feed | abandoned [--lane L] [--task UUID] [--limit N]
+  status  [--lane L] [--limit N]   one-glance oversight summary (board + abandoned + recent feed)
 
 env: AINARRES_BASE_URL, JWT_SECRET (token), AINARRES_TOKEN (bearer; --token overrides)`;
 
