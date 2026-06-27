@@ -41,7 +41,7 @@ describe("seed fixture", () => {
     expect(c.lanes).toBe(1);
     expect(c.transitions).toBe(4); // 3 advance + 1 reject
     expect(c.families).toBe(2);
-    expect(c.family_features).toBe(11); // 3 for opencode+qwen, 8 for claude-code+opus (+capability:integrate M8; +lane:dev/role:designer/role:integrator M9)
+    expect(c.family_features).toBe(9); // 3 for opencode+qwen, 6 for claude-code+opus (M11: integrate moved to grok+grok-build; claude-code+opus = lane:api/role:analyst/role:reviewer/capability:plan/lane:dev/role:designer)
   });
 
   it("the dev-loop workflow has exactly one initial and one terminal stage", () => {

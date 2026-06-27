@@ -188,18 +188,13 @@ on conflict (family_id, feature_id) do nothing;
 -- ── M8: egress capability (ADR 0015) ─────────────────────────────────────────
 -- Pushing to git / opening a PR is a GATED feature, not an ambient power: a family
 -- can be allowed to code but not push, which makes it ineligible for an `integrate`
--- transition (the substrate decides who may touch the outside world). The dev
--- workflow that consumes this feature arrives in M9; here we seed the feature and
--- grant it to the frontier family, which plays the integrator role.
+-- transition (the substrate decides who may touch the outside world). The feature
+-- is seeded here; it is GRANTED only to the push-trusted integrator family, which
+-- is the grok harness (M11) — the only runtime that can actually merge. (M10's
+-- rehearsal showed the frontier orchestrator can't perform the company-deny-gated
+-- merge, so capability:integrate must NOT sit on claude-code+opus.)
 insert into app.features (kind, key) values ('capability', 'integrate')
 on conflict (kind, key) do nothing;
-
-insert into app.family_features (family_id, feature_id)
-select f.id, ft.id
-from app.agent_families f
-join app.features ft on ft.name = 'capability:integrate'
-where f.key = 'claude-code+opus'
-on conflict (family_id, feature_id) do nothing;
 
 -- ── M9: the AINARRES development workflow (ADR 0016) ──────────────────────────
 -- The real loop, as data: change → test → integrate → validate, with rework. This
@@ -280,12 +275,16 @@ from app.projects p, app.workflows w
 where p.slug = 'ainarres' and w.key = 'ainarres-dev'
 on conflict (project_id, key) do nothing;
 
--- Real families on the dev lane: the frontier plays designer/reviewer/integrator
--- (and holds capability:integrate, granted above); the worker model implements.
+-- Real families on the dev lane. Roles map to the harness that can perform them:
+--   claude-code+opus (frontier, Claude Code) → designer + reviewer. NOT integrator:
+--     Claude Code is under the company merge-deny and cannot perform the merge.
+--   opencode+qwen3.6 (local worker) → implementer.
+--   grok+grok-build (xAI harness, M11) → integrator (holds capability:integrate;
+--     see the M11 block below).
 insert into app.family_features (family_id, feature_id)
 select f.id, ft.id
 from app.agent_families f
-join app.features ft on ft.name = any (array['lane:dev', 'role:designer', 'role:integrator'])
+join app.features ft on ft.name = any (array['lane:dev', 'role:designer'])
 where f.key = 'claude-code+opus'
 on conflict (family_id, feature_id) do nothing;
 
@@ -294,6 +293,23 @@ select f.id, ft.id
 from app.agent_families f
 join app.features ft on ft.name = any (array['lane:dev', 'role:implementer'])
 where f.key = 'opencode+qwen3.6'
+on conflict (family_id, feature_id) do nothing;
+
+-- ── M11: the grok integrator family (ADR 0015/0017) ──────────────────────────
+-- Integration (push + PR + merge) runs on the grok harness — outside the company-
+-- managed merge policy, and invoked INDEPENDENTLY of the frontier orchestrator
+-- (M10's rehearsal proved Claude Code cannot spawn another harness to perform a
+-- deny-gated merge — that would launder the denial). So capability:integrate lives
+-- with the grok family, the only runtime that can actually merge.
+insert into app.agent_families (key, description) values
+  ('grok+grok-build', 'grok harness, grok-build model — push-trusted independent integrator')
+on conflict (key) do nothing;
+
+insert into app.family_features (family_id, feature_id)
+select f.id, ft.id
+from app.agent_families f
+join app.features ft on ft.name = any (array['lane:dev', 'role:integrator', 'capability:integrate'])
+where f.key = 'grok+grok-build'
 on conflict (family_id, feature_id) do nothing;
 
 commit;
