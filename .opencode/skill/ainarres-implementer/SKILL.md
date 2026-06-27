@@ -32,6 +32,8 @@ Every CLI command prints **one JSON line**. Exit 0 = `ok`; exit 1 = not ok (read
 
 - One task at a time. `already_holding` → finish or `release` first.
 - The deliverable is the code on the branch; the verbs carry only a reference (`--branch`).
+- Write files ONLY inside the repo, at the exact paths the task names — never `/tmp` or
+  outside the project.
 - Validate before advancing. `code:"lease_lost"` → stop and `claim` again.
 - Push only your `dev/<task.id>` branch — never the default branch, never open PRs (that is
   the integrator's gated job). Stay in the `dev` lane.

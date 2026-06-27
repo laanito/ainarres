@@ -29,8 +29,11 @@ Repeat until `claim` reports `code:"empty"`:
    **At `reviewing`** (pre-integration code review):
    - Check out the implementer's branch and read the diff against the default branch.
    - Confirm it does what `instructions`/`acceptance` asked — and nothing reckless.
-   - **Independently run the task's `validate`** (don't trust the implementer's word). It
-     must exit 0.
+   - **Independently run the task's *substrate-free* `validate`** (don't trust the
+     implementer's word) — the targeted unit test / `node --check`, which must exit 0. Do
+     NOT run the full test suite here: dev tasks share one live substrate and the full
+     suite's DB fixtures corrupt other lanes. Full-suite regression is the `validating`
+     stage below (on a clean rebuild), by design.
    - **Pass** → `ainarres advance <task.id> --to integrating --note "review ok, validated"`.
    - **Problems** → `ainarres reject <task.id> --to implementing --reason "<specific, actionable>"`.
      Rework goes back to an implementer.

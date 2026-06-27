@@ -48,6 +48,8 @@ Rules:
 - Exactly one task at a time. `already_holding` → finish or release first.
 - The deliverable is the code on the branch; the CLI records only a reference (`--branch`).
 - Validate before you advance — never hand review unvalidated work.
+- Write files ONLY inside the repository, at the exact paths the task names. NEVER write to
+  /tmp or any path outside the project — the work product is the change on your branch.
 - `"code":"lease_lost"` → you lost the task; go to step 1.
 - You push only your own `dev/<task.id>` branch. You do NOT push to the default branch or
   open PRs — that is the integrator's job. Do not ask the user questions; work the queue.
