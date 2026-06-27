@@ -66,6 +66,20 @@ describe("seed fixture", () => {
     expect(orphans).toEqual([]);
   });
 
+  it("roster: opencode+big-pickle is a cheap dev implementer", () => {
+    // A second cheap implementer (free/rate-limited, API-driven via opencode). Holds
+    // lane:dev + role:implementer only — NOT a frontier tier — so v3 escalation routes
+    // tasks it can't finish to a frontier family (ADR 0019).
+    const feats = query<{ name: string }>(`
+      select ft.name
+      from app.family_features ff
+      join app.agent_families f on f.id = ff.family_id
+      join app.features ft on ft.id = ff.feature_id
+      where f.key = 'opencode+big-pickle' order by ft.name
+    `).map((r) => r.name);
+    expect(feats).toEqual(["lane:dev", "role:implementer"]);
+  });
+
   it("is idempotent — re-applying the seed changes no row counts", () => {
     const before = counts();
     const res = execFile("db/seed.sql");

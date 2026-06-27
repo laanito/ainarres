@@ -312,4 +312,21 @@ join app.features ft on ft.name = any (array['lane:dev', 'role:integrator', 'cap
 where f.key = 'grok+grok-build'
 on conflict (family_id, feature_id) do nothing;
 
+-- ── Roster: opencode + big-pickle (cheap implementer) ────────────────────────
+-- An API-driven model available through opencode (free, rate-limited). A second
+-- CHEAP implementer alongside opencode+qwen3.6: holds role:implementer on lane:dev
+-- but NOT capability:frontier, so v3's escalation (ADR 0019) routes a task it can't
+-- finish on to a frontier family. Invoke with the existing ainarres-implementer
+-- agent and `-m opencode/big-pickle`.
+insert into app.agent_families (key, description) values
+  ('opencode+big-pickle', 'opencode harness, big-pickle model — API-driven cheap implementer (free, rate-limited)')
+on conflict (key) do nothing;
+
+insert into app.family_features (family_id, feature_id)
+select f.id, ft.id
+from app.agent_families f
+join app.features ft on ft.name = any (array['lane:dev', 'role:implementer'])
+where f.key = 'opencode+big-pickle'
+on conflict (family_id, feature_id) do nothing;
+
 commit;
