@@ -152,3 +152,14 @@ with no conductor.
   escalation), [ADR 0004](../decisions/0004-feature-model.md).
 - **Designer difficulty hints** — an upfront tier hint layered over M12's attempts-based
   escalation, if mis-routing proves costly.
+- **Graduated capability tiers (greater granularity)** — M12's escalation is **binary**
+  (`capability:frontier` y/n). The real roster is a *ladder* — observed (2026-06-28):
+  `qwen3.6 (local) < big-pickle ≈ nemotron-3-super < nemotron-3-ultra < grok (paid)`. A
+  graduated escalation that climbs the ladder on repeated failure needs an **ordered**
+  capability dimension (a numeric level + a `>=` check), which the current **unordered**
+  feature-superset matching ([ADR 0004](../decisions/0004-feature-model.md)) cannot express
+  — so it's a new mechanism, not just more features. **Forward-compat steer for M12:** model
+  the tier so generalizing to N rungs is additive (prefer an ordered `tier`/level over a
+  lone boolean feature), even though v3 ships only two rungs. Free frontier-scale models
+  (e.g. `nemotron-3-ultra`, 550B) also blur "cheap vs frontier" — another reason the binary
+  split is temporary.
