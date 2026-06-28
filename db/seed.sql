@@ -350,4 +350,27 @@ join app.features ft on ft.name = any (array['lane:dev', 'role:implementer'])
 where f.key in ('opencode+nemotron-3-ultra', 'opencode+nemotron-3-super')
 on conflict (family_id, feature_id) do nothing;
 
+-- ── M12: capability escalation (ADR 0019, ordered tiers) ─────────────────────
+-- tier:2 is the frontier rung (base implementer work needs no tier feature). The
+-- frontier implementer / escalation target is grok+grok-build: it already integrates;
+-- now it also claims escalated `implementing` tasks (role:implementer + tier:2). The
+-- cheap implementers (qwen3.6, big-pickle, nemotron-*) hold no tier:2, so a task
+-- escalated to require tier:2 routes to grok. Implementing tasks escalate after the
+-- first failed attempt (escalate_after = 1 < max_attempts = 3).
+-- NB: nemotron-3-ultra (550B, free) is a candidate to ALSO hold tier:2 as a free
+-- escalation target — a one-line grant when we choose to trust it (roadmap / v3-plan).
+insert into app.features (kind, key) values ('tier', '2')
+on conflict (kind, key) do nothing;
+
+insert into app.family_features (family_id, feature_id)
+select f.id, ft.id
+from app.agent_families f
+join app.features ft on ft.name = any (array['role:implementer', 'tier:2'])
+where f.key = 'grok+grok-build'
+on conflict (family_id, feature_id) do nothing;
+
+update app.stages set escalate_after = 1
+where key = 'implementing'
+  and workflow_id = (select id from app.workflows where key = 'ainarres-dev');
+
 commit;

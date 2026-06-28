@@ -78,3 +78,25 @@ asks. No new state; the lazy model already expresses "waiting for a capable clai
   loop** — the missing piece for [0018](0018-v3-scope-autonomous-loop.md)'s gate.
 - Built in M12 ([`plans/v3-plan.md`](../plans/v3-plan.md)); the seed grants the tier feature
   and sets `escalate_after` on the dev workflow's `implementing` stage.
+
+## Amendment (M12, as built — per roadmap #29)
+
+Refined while building, to be forward-compatible with the graduated-tiers roadmap (#29):
+
+- **Ordered tier feature, not a lone boolean.** Instead of `capability:frontier`, the tier
+  is a new feature **kind `tier`** with an ordinal key — v3 ships `tier:2` (the frontier
+  rung; base work needs no tier feature = implicit tier 1). `maybe_escalate` rewrites a
+  task's `required_features` to require the **next** tier up. Adding `tier:3`, `tier:4`… is
+  additive seed data; the helper escalates to whatever the next existing tier is.
+- **Ordering rides the existing superset match — no new mechanism.** This resolves the
+  concern in #29 ("set-superset can't express ≥ N"): with families holding the tier(s) they
+  are capable of, *"requires tier:N"* is satisfied by the ordinary `eff @> required_features`
+  check. No numeric `>=` dimension was added; the feature model is untouched.
+- **Escalation is OPT-IN.** `escalate_after` (stage → workflow) defaults to **NULL = never
+  escalate**, so existing workflows are unaffected. (An earlier draft used a system default
+  of 1, which — with `tier:2` seeded globally — made *every* workflow escalate after one
+  release and broke the m4/recovery tests. Opt-in is the fix.) Only the dev `implementing`
+  stage sets it (`escalate_after = 1`).
+- **The frontier implementer rung is `grok+grok-build`** (`role:implementer` + `tier:2`),
+  reusing the independent integrator family. Free frontier-scale models (e.g.
+  `nemotron-3-ultra`) can join the rung later with a one-line `tier:2` grant.
