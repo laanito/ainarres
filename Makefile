@@ -1,7 +1,14 @@
 SHELL := /bin/bash
 COMPOSE := docker compose
 
-.PHONY: up down reset migrate seed test verify-down logs ps
+# The autonomous-loop substrate (ADR 0020, M13): the SAME compose file, a SEPARATE
+# compose project + env file (own containers, volume, and host ports 5434/3011).
+# This is the instance the hands-off v3 loop coordinates on, isolated from the test
+# substrate above so an unattended `make reset` can't pollute the live board.
+COMPOSE_LOOP := docker compose -p ainarres-loop --env-file loop.env
+
+.PHONY: up down reset migrate seed test verify-down logs ps \
+        loop-up loop-down loop-seed loop-reset loop-ps loop-logs verify-isolation
 
 ## Bring the stack up (db → migrate → postgrest) and wait for db health.
 up:
@@ -48,3 +55,40 @@ logs:
 
 ps:
 	$(COMPOSE) ps
+
+# ── Autonomous-loop substrate (ADR 0020, M13) ─────────────────────────────────
+# A second AINARRES instance on its own compose project + ports (loop.env), for
+# the hands-off loop's `dev` board. Brings up db → migrate → postgrest, same as
+# `up`, but fully isolated from the test substrate. NB: no `loop-test` target —
+# the vitest suite targets the default `ainarres` project on purpose.
+
+## Bring the loop substrate up (own project/volume/ports from loop.env).
+loop-up:
+	$(COMPOSE_LOOP) up -d
+
+## Tear the loop substrate down, including its data volume.
+loop-down:
+	$(COMPOSE_LOOP) down -v
+
+## Load the idempotent seed into the loop substrate's db.
+loop-seed:
+	@$(COMPOSE_LOOP) exec -T db \
+	  psql -v ON_ERROR_STOP=1 -U postgres -d ainarres < db/seed.sql > /dev/null
+	@echo "✓ loop seed loaded"
+
+## Known-zero rebuild of the loop substrate (no test suite — see note above).
+loop-reset: loop-down loop-up loop-seed
+	@echo "✓ loop reset complete"
+
+loop-ps:
+	$(COMPOSE_LOOP) ps
+
+loop-logs:
+	$(COMPOSE_LOOP) logs -f
+
+## Prove the two substrates are isolated: plant a sentinel task in the loop's
+## `dev` lane, rebuild + run the full suite against the TEST substrate (which
+## itself creates dev-lane fixtures there), and assert the loop's board is
+## untouched. This is M13's done-test (ADR 0020 § pollution-proofing).
+verify-isolation:
+	@bash scripts/verify-isolation.sh
