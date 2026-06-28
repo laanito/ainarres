@@ -115,6 +115,12 @@ service) and PostgREST on `localhost:3010`. Point a local agent at it with the
 pull work; read the board/feed views to watch. `make reset` runs the full
 teardown→rebuild→seed→test loop.
 
+The hands-off v3 loop runs on a **second, isolated instance** of the same substrate
+(the `loop-*` targets: `make loop-up` / `loop-seed` / `loop-reset`) so an unattended
+full-suite run can't pollute the live board — see
+[`.agents/design/substrates.md`](.agents/design/substrates.md). Prove the two stay
+apart with `make verify-isolation`.
+
 > A connection pooler (PgBouncer, transaction mode) sits in front of the writer in
 > any non-toy deployment — a herd of agents will otherwise exhaust Postgres'
 > process-per-connection model. The RPC calls are short transactions, ideal for it.
