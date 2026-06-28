@@ -66,18 +66,22 @@ describe("seed fixture", () => {
     expect(orphans).toEqual([]);
   });
 
-  it("roster: opencode+big-pickle is a cheap dev implementer", () => {
-    // A second cheap implementer (free/rate-limited, API-driven via opencode). Holds
+  it("roster: cheap API implementers hold exactly [lane:dev, role:implementer]", () => {
+    // Free/rate-limited API models added to the swarm via opencode. Each holds
     // lane:dev + role:implementer only — NOT a frontier tier — so v3 escalation routes
-    // tasks it can't finish to a frontier family (ADR 0019).
-    const feats = query<{ name: string }>(`
-      select ft.name
-      from app.family_features ff
-      join app.agent_families f on f.id = ff.family_id
-      join app.features ft on ft.id = ff.feature_id
-      where f.key = 'opencode+big-pickle' order by ft.name
-    `).map((r) => r.name);
-    expect(feats).toEqual(["lane:dev", "role:implementer"]);
+    // tasks they can't finish to a frontier family (ADR 0019).
+    const families = ["opencode+big-pickle", "opencode+nemotron-3-ultra", "opencode+nemotron-3-super"];
+    for (const key of families) {
+      const safe = key.replace(/'/g, "''");
+      const feats = query<{ name: string }>(`
+        select ft.name
+        from app.family_features ff
+        join app.agent_families f on f.id = ff.family_id
+        join app.features ft on ft.id = ff.feature_id
+        where f.key = '${safe}' order by ft.name
+      `).map((r) => r.name);
+      expect(feats, key).toEqual(["lane:dev", "role:implementer"]);
+    }
   });
 
   it("is idempotent — re-applying the seed changes no row counts", () => {

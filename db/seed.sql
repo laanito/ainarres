@@ -329,4 +329,25 @@ join app.features ft on ft.name = any (array['lane:dev', 'role:implementer'])
 where f.key = 'opencode+big-pickle'
 on conflict (family_id, feature_id) do nothing;
 
+-- ── Roster: openrouter nemotron-3 models via opencode (cheap implementers) ────
+-- Two more free, rate-limited API implementers reachable through opencode/openrouter,
+-- expanding the cheap-tier swarm. Both hold role:implementer on lane:dev, NOT
+-- capability:frontier (so v3 escalation, ADR 0019, routes their stalls onward).
+-- Invoke with the ainarres-implementer agent and the matching `-m` model id:
+--   opencode+nemotron-3-ultra → -m openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
+--   opencode+nemotron-3-super → -m openrouter/nvidia/nemotron-3-super-120b-a12b:free
+-- NB: nemotron-3-ultra is 550B (frontier-scale) yet free — a candidate to hold
+-- capability:frontier when that feature lands (M12), i.e. a free escalation target.
+insert into app.agent_families (key, description) values
+  ('opencode+nemotron-3-ultra', 'opencode/openrouter, nvidia nemotron-3-ultra-550b-a55b:free — cheap implementer (free, rate-limited)'),
+  ('opencode+nemotron-3-super', 'opencode/openrouter, nvidia nemotron-3-super-120b-a12b:free — cheap implementer (free, rate-limited)')
+on conflict (key) do nothing;
+
+insert into app.family_features (family_id, feature_id)
+select f.id, ft.id
+from app.agent_families f
+join app.features ft on ft.name = any (array['lane:dev', 'role:implementer'])
+where f.key in ('opencode+nemotron-3-ultra', 'opencode+nemotron-3-super')
+on conflict (family_id, feature_id) do nothing;
+
 commit;
