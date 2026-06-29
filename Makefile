@@ -92,3 +92,18 @@ loop-logs:
 ## untouched. This is M13's done-test (ADR 0020 § pollution-proofing).
 verify-isolation:
 	@bash scripts/verify-isolation.sh
+
+# ── The autonomous run harness (ADR 0020, M14) ────────────────────────────────
+# The dumb driver + standing role pollers (loop/). Runs against the loop substrate.
+
+## Run the loop on a real brief with the real harnesses (owner-invoked — Claude
+## Code cannot spawn grok; see loop/README.md). Usage: make loop-run BRIEF=path
+loop-run:
+	@test -n "$(BRIEF)" || { echo "usage: make loop-run BRIEF=<brief-file>"; exit 2; }
+	@bash loop/driver.sh "$(BRIEF)"
+
+## Deterministic plumbing test: a fresh loop substrate + the MOCK harness drive a
+## brief to `done` with no human coordination. This is M14's done-test.
+loop-selftest: loop-reset
+	@LOOP_MODE=mock POLL_INTERVAL=1 LOOP_MAX_SECONDS=120 \
+	  bash loop/driver.sh loop/examples/selftest-brief.txt

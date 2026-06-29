@@ -1,0 +1,5 @@
+Mock self-test feature: a no-op change used by `make loop-selftest`.
+This brief is decomposed by the MOCK harness into one trivial task (validate
+`true`) that walks proposed → designing → implementing → reviewing → integrating
+→ validating → done, proving the dumb-driver + standing-poller plumbing drains a
+board with no human coordination. Real features use a real brief and real harnesses.

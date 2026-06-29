@@ -1,0 +1,11 @@
+Add an `ainarres version` subcommand that prints the CLI version.
+
+- It reads the "version" field from package.json and prints it on one line
+  (for example: `ainarres 0.0.0`). No network and no database access.
+- Wire it into the COMMANDS map and the USAGE text in bin/ainarres.mjs, following
+  the style of the existing subcommands. It needs no token.
+- Add a SUBSTRATE-FREE unit test (no Docker, no DB) that runs the subcommand and
+  asserts it prints the package.json version and exits 0.
+
+The per-task validate must be substrate-free: a single targeted test-file run,
+e.g. `npx vitest run test/version.test.ts`. Do not run the full suite.

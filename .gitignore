@@ -15,3 +15,7 @@ work/
 .opencode/*
 !.opencode/agent/
 !.opencode/skill/
+
+# Autonomous-loop run artifacts: per-poller logs + the STOP sentinel (M14). The
+# scripts + config under loop/ are committed; only runtime output is ignored.
+loop/run/
