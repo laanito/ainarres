@@ -10,7 +10,7 @@ loop/
   driver.sh                the dumb driver: brief → designer → sweep tiers in rounds → stop when drained
   roles.sh                 config: the ordered worker tiers + each tier's harness, token features
   grok-frontier.sh         real frontier harness wrapper (grok; designer/reviewer/integrator/escalated-impl)
-  opencode-implementer.sh  real cheap-implementer harness wrapper (opencode + qwen3.6)
+  opencode-implementer.sh  real cheap-implementer harness wrapper (opencode; model per tier)
   mock-harness.sh          deterministic stand-in (LOOP_MODE=mock) for the plumbing test
   examples/                feature briefs
   run/                     per-tier sweep logs (gitignored)
@@ -20,20 +20,21 @@ loop/
 
 | Tier | Harness / family | Role(s) |
 |---|---|---|
-| `cheap-implementer` | `opencode + qwen3.6` (local) | implementer (the default) |
-| `fallback-implementer` | `opencode + big-pickle` (free API) | implementer (fallback for qwen) |
+| `cheap-implementer` | `opencode + big-pickle` (free API) | implementer (primary) |
+| `fallback-implementer` | `opencode + nemotron-3-ultra` (free API) | implementer (fallback) |
 | `frontier` | `grok + grok-build` | designer, reviewer, integrator, **escalated** implementer (`tier:2`) |
 
 The driver sweeps the tiers **in this order, in rounds** (`roles.sh::LOOP_TIERS`).
-Because each cheap tier runs to "nothing claimable" *before* the next runs, the local
-qwen implementer claims `implementing` work first; the **fallback** opencode model
-(swap via `OPENCODE_FALLBACK_MODEL`) covers qwen being down/slow/depleted **and**
-retries a task qwen failed — both before the task escalates. The frontier only picks
-up what's left: review/integrate, and M12-escalated tasks the cheap tiers couldn't
-finish (`tier:2`). The dev `implementing` stage uses `escalate_after = 2`, so both
-cheap tiers get an attempt before grok. **Tiering, not concurrency**, keeps the cheap
-tiers doing the heavy lifting with the frontier as the escalation ceiling — and avoids
-the race where a concurrent frontier poller would grab implementing work first.
+Because each cheap tier runs to "nothing claimable" *before* the next runs, big-pickle
+claims `implementing` work first; the **fallback** (nemotron-3-ultra; swap via
+`OPENCODE_FALLBACK_MODEL`) covers big-pickle being down/depleted **and** retries a task
+it failed — both before the task escalates. The frontier only picks up what's left:
+review/integrate, and M12-escalated tasks the cheap tiers couldn't finish (`tier:2`).
+The dev `implementing` stage uses `escalate_after = 2`, so both cheap tiers get an
+attempt before grok. **Tiering, not concurrency**, keeps the cheap tiers doing the
+heavy lifting with the frontier as the escalation ceiling. (The local `qwen3.6` was
+dropped: it implemented correctly but didn't reliably *complete* the loop —
+commit/advance/release — stranding tasks. Swap models per tier via the `*_MODEL` vars.)
 
 Token features per tier live in `roles.sh::role_features` and are authoritative for
 the run (the substrate trusts the signed token's features minus denials — ADR 0007).
@@ -57,13 +58,6 @@ merge — retro `m11-bootstrap`), and the integrator boundary must stay independ
 make loop-up && make loop-seed          # bring up the isolated loop substrate (5434/3011)
 make loop-run BRIEF=path/to/feature-brief.txt
 ```
-
-`loop-run` starts from a **fresh board** by default (it resets the loop substrate
-first) — the board is disposable per-feature, so this avoids resuming a previous,
-interrupted run's stranded claims (a worker that died mid-task holds its claim until
-its lease expires). To deliberately continue an interrupted run instead, pass
-`LOOP_RESUME=1 make loop-run BRIEF=…` (the driver then skips decomposition and resumes
-the existing board).
 
 The harness wrappers (`grok-frontier.sh`, `opencode-implementer.sh`) resolve their
 binaries themselves (no PATH wiring needed); override with `GROK_FRONTIER_CMD` /
@@ -94,6 +88,10 @@ and their git/gh/node children) via a TERM→KILL `kill_tree` in an EXIT/INT/TER
 
 ## Resilience
 
-A sweep that dies mid-task is recovered with no special handling: the held task's
-lease expires and the next claim hands it out again (lazy reclaim, ADR 0009 — already
-tested). A non-zero harness sweep is logged and the next round retries.
+If a tier's sweep **ends still holding a task** (it stopped without advancing or
+releasing — e.g. it implemented but never committed), the driver **releases that claim
+immediately** after the sweep (`release_stranded` in `driver.sh`). The loop is
+serialized, so a returned sweep's worker is provably done; releasing bumps `attempts`
+(feeding M12 escalation), so the next tier/round picks the task up at once — no waiting
+for the lease. A sweep that is *killed* (interrupt) instead relies on lazy reclaim
+(ADR 0009): the lease expires and a later claim hands the task out again.
