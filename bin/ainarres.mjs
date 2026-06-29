@@ -163,6 +163,15 @@ export function formatStatus({ board = [], feed = [], abandoned = [] }, { lane =
   return lines.join("\n");
 }
 
+// Decode a JWT-ish token's payload without verifying the signature. The token is
+// split on "." and the middle segment is base64url-decoded then JSON-parsed.
+// Intentionally local-only: no network, no DB, no cryptographic verification.
+export function decodeClaims(token) {
+  const [, payloadB64] = token.split(".");
+  const json = Buffer.from(payloadB64, "base64url").toString("utf8");
+  return JSON.parse(json);
+}
+
 const COMMANDS = {
   // Mint an HS256 token locally (operator holds the secret; signing lives outside
   // the DB per M2). Features are explicit; this never reads the DB.
@@ -191,6 +200,11 @@ const COMMANDS = {
     const pkgPath = fileURLToPath(new URL("../package.json", import.meta.url));
     const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
     process.stdout.write(`ainarres ${pkg.version}\n`);
+  },
+
+  whoami(rest, values, token) {
+    const c = decodeClaims(token);
+    emit({ sub: c.sub, family: c.family, role: c.role, features: c.features });
   },
 
   create(rest, values, token) {
@@ -302,6 +316,7 @@ const COMMANDS = {
 const OPTS = {
   create: { lane: { type: "string" }, instructions: { type: "string" }, entry: { type: "string" }, validate: { type: "string" }, payload: { type: "string" }, priority: { type: "string" }, subject: { type: "string" }, "depends-on": { type: "string" }, token: { type: "string" } },
   claim: { lane: { type: "string" }, token: { type: "string" } },
+  whoami: { token: { type: "string" } },
   progress: { note: { type: "string" }, artifact: { type: "string", multiple: true }, pr: { type: "string" }, branch: { type: "string" }, commit: { type: "string" }, token: { type: "string" } },
   advance: { to: { type: "string" }, note: { type: "string" }, artifact: { type: "string", multiple: true }, pr: { type: "string" }, branch: { type: "string" }, commit: { type: "string" }, token: { type: "string" } },
   reject: { to: { type: "string" }, reason: { type: "string" }, artifact: { type: "string", multiple: true }, pr: { type: "string" }, branch: { type: "string" }, commit: { type: "string" }, token: { type: "string" } },
@@ -319,6 +334,7 @@ const USAGE = `ainarres — agent CLI (verbs over PostgREST)
 
   token   --family F --role R --features a,b [--sub S] [--ttl 900]
   version   print CLI version (from package.json; no token)
+  whoami    print identity in bearer token as {sub,family,role,features} (local decode; no network)
   create  --lane L [--instructions T --entry F --validate CMD | --payload JSON] [--priority N] [--subject UUID] [--depends-on ID,ID]
   claim   [--lane L]
   progress  <task-id> [--note T] [--artifact PATH ...] [--pr URL --branch NAME --commit SHA]
