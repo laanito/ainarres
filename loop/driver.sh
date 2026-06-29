@@ -42,6 +42,48 @@ counts() {
     | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{r=[]} if(!Array.isArray(r))r=[]; const a=r.filter(x=>!x.is_terminal&&!x.blocked).length; const b=r.filter(x=>x.blocked).length; process.stdout.write(a+" "+b)})'
 }
 
+# ── Poller lifecycle: track launched pollers and tear the whole tree down ──────
+pids=()        # PIDs of the standing pollers (populated at launch)
+_stopped=0     # guard so teardown runs at most once
+
+# Recursively kill a process and all its descendants. A poller spawns a harness
+# (grok/opencode), which spawns git/gh/node; a flat `kill <poller>` would orphan
+# those, leaving real egress work running unsupervised. pgrep walks the tree
+# (portable on macOS + Linux); kill children before the parent.
+kill_tree() {
+  local pid="$1" sig="${2:-TERM}" child
+  for child in $(pgrep -P "$pid" 2>/dev/null || true); do kill_tree "$child" "$sig"; done
+  kill "-$sig" "$pid" 2>/dev/null || true
+}
+
+# Stop every poller and its harness subtree. Idempotent. STOP sentinel first (so a
+# poller resting between sweeps exits cleanly), then TERM the trees, a short grace,
+# then KILL any survivor — so killing the driver (or `make loop-run`) never leaves
+# runners doing git/gh work behind it.
+stop_pollers() {
+  [ "$_stopped" = 1 ] && return 0
+  _stopped=1
+  : >"$STOP_FILE" 2>/dev/null || true
+  local pid
+  for pid in ${pids[@]+"${pids[@]}"}; do kill_tree "$pid" TERM; done
+  local i alive
+  for i in 1 2 3 4 5 6; do
+    alive=0
+    for pid in ${pids[@]+"${pids[@]}"}; do
+      if kill -0 "$pid" 2>/dev/null; then alive=1; fi
+    done
+    [ "$alive" = 0 ] && break
+    sleep 1
+  done
+  for pid in ${pids[@]+"${pids[@]}"}; do kill_tree "$pid" KILL; done
+  rm -f "$STOP_FILE" 2>/dev/null || true
+}
+
+# Tear down on normal exit, error (set -e), or interrupt. So Ctrl-C or a kill of the
+# driver / `make loop-run` takes the pollers and their harnesses down with it.
+trap 'stop_pollers' EXIT
+trap 'printf "\n→ driver: interrupted — stopping pollers…\n"; exit 130' INT TERM
+
 echo "→ driver: loop substrate = ${AINARRES_BASE_URL} (mode=$LOOP_MODE)"
 if ! ai board --lane "$LOOP_LANE" --token "$OVERSIGHT_TOKEN" >/dev/null 2>&1; then
   echo "driver: cannot reach the loop substrate at $AINARRES_BASE_URL." >&2
@@ -68,7 +110,6 @@ else
 fi
 
 echo "→ driver: launching standing pollers: ${LOOP_POLLERS[*]}"
-pids=()
 for p in "${LOOP_POLLERS[@]}"; do
   bash "$HERE/poller.sh" "$p" &
   pids+=($!)
@@ -89,9 +130,7 @@ while true; do
 done
 
 echo "→ driver: stopping pollers…"
-: >"$STOP_FILE"
-for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
-rm -f "$STOP_FILE"
+stop_pollers
 
 echo "→ driver: final board:"
 ai status --lane "$LOOP_LANE" --token "$OVERSIGHT_TOKEN" || true

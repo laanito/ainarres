@@ -18,9 +18,18 @@ cd "$REPO"
 : "${AINARRES_TOKEN:?grok-frontier: AINARRES_TOKEN must be set by the poller/driver}"
 : "${AINARRES_BASE_URL:?grok-frontier: AINARRES_BASE_URL must be set (from loop.env)}"
 
-GROK="${GROK_BIN:-$HOME/.grok/bin/grok}"
 MODEL="${GROK_MODEL:-grok-build}"
-[ -x "$GROK" ] || { echo "grok-frontier: grok not found/executable at $GROK (set GROK_BIN)" >&2; exit 2; }
+
+# Resolve the grok binary robustly (pollers run in a non-interactive shell whose PATH
+# may lack ~/.grok/bin): explicit GROK_BIN, else PATH, else the known install path.
+GROK="${GROK_BIN:-}"
+if [ -z "$GROK" ]; then
+  if command -v grok >/dev/null 2>&1; then GROK="$(command -v grok)"
+  elif [ -x "$HOME/.grok/bin/grok" ]; then GROK="$HOME/.grok/bin/grok"
+  else echo "grok-frontier: grok not found on PATH or at ~/.grok/bin (set GROK_BIN)" >&2; exit 2
+  fi
+fi
+[ -x "$GROK" ] || command -v "$GROK" >/dev/null 2>&1 || { echo "grok-frontier: '$GROK' is not executable" >&2; exit 2; }
 
 # Static instructions — QUOTED heredoc so nothing here expands (the token never
 # leaks into argv; grok reads it from its inherited env).
