@@ -58,9 +58,14 @@ describe("formatStatus", () => {
     expect(out).toContain("recent events (showing up to 10):");
   });
 
-  test("lane header vs all-lanes header", () => {
-    expect(formatStatus({}, { lane: "dev" })).toContain("status — lane dev");
-    expect(formatStatus({})).toContain("status — all lanes");
+  test("lane header vs all-lanes header includes task count", () => {
+    const board3 = [
+      { task_id: "t1", stage: "implementing" },
+      { task_id: "t2", stage: "implementing" },
+      { task_id: "t3", stage: "reviewing" },
+    ];
+    expect(formatStatus({ board: board3 }, { lane: "dev" })).toContain("status — lane dev (3 tasks)");
+    expect(formatStatus({})).toContain("status — all lanes (0 tasks)");
   });
 
   test("blocked count line is emitted after totals and counts rows with blocked===true", () => {
