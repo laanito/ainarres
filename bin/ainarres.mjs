@@ -108,7 +108,7 @@ export function formatStatus({ board = [], feed = [], abandoned = [] }, { lane =
   const lines = [];
 
   // 1. Header.
-  lines.push(lane ? `status — lane ${lane}` : "status — all lanes");
+   lines.push(lane ? `status — lane ${lane} (${board.length} tasks)` : `status — all lanes (${board.length} tasks)`);
 
   // 2. Per-stage task summary from board.
   if (board.length === 0) {
