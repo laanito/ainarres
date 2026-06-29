@@ -62,4 +62,15 @@ describe("formatStatus", () => {
     expect(formatStatus({}, { lane: "dev" })).toContain("status — lane dev");
     expect(formatStatus({})).toContain("status — all lanes");
   });
+
+  test("blocked count line is emitted after totals and counts rows with blocked===true", () => {
+    const board = [
+      { task_id: "t1", stage: "implementing", blocked: true },
+      { task_id: "t2", stage: "implementing", blocked: false },
+      { task_id: "t3", stage: "reviewing", blocked: true },
+      { task_id: "t4", stage: "reviewing" }, // absent blocked should not count
+    ];
+    const out = formatStatus({ board });
+    expect(out).toContain("  blocked: 2");
+  });
 });
