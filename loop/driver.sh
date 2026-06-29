@@ -93,15 +93,34 @@ stop_active() {
 trap 'stop_active' EXIT
 trap 'printf "\n→ driver: interrupted — stopping the active sweep…\n"; exit 130' INT TERM
 
+# If a finished sweep left a task claimed (it stopped without advancing OR releasing
+# — e.g. it implemented but never committed), release it so the next tier/round can
+# pick it up. Safe because the loop is SERIALIZED: when the sweep returns, that worker
+# is provably done, so any task it still holds is stranded. release bumps `attempts`,
+# which feeds M12 escalation — exactly the right effect. No lease wait, no polling.
+release_stranded() {
+  local sub="$1" tok="$2" held
+  held="$(ai board --lane "$LOOP_LANE" --token "$OVERSIGHT_TOKEN" 2>/dev/null \
+    | node -e 'let s="";const sub=process.argv[1];process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{r=[]};if(!Array.isArray(r))r=[];const t=r.find(x=>x.claimed_by===sub&&!x.is_terminal);process.stdout.write(t?t.task_id:"")})' "$sub")"
+  if [ -n "$held" ]; then
+    echo "  ↳ tier left $held claimed without advancing — releasing it for the next tier."
+    ai release "$held" --reason "worker sweep ended without advancing or releasing (stranded)" --token "$tok" >/dev/null 2>&1 || true
+  fi
+}
+
 # Run ONE tier's harness sweep to completion (its skill loops claim→work→advance
-# until "nothing claimable", then exits). Backgrounded + waited so the trap can
-# kill its whole subtree on interrupt. Each sweep gets a fresh per-tier token.
+# until "nothing claimable", then exits). Backgrounded + waited so the trap can kill
+# its whole subtree on interrupt. The token uses a KNOWN sub so we can release a
+# claim the sweep stranded (see release_stranded).
 run_sweep() {
-  local tier="$1" brief="${2:-}" rc=0
-  AINARRES_TOKEN="$(mint_token "$tier")" harness_sweep "$tier" "$brief" >>"$RUN_DIR/$tier.log" 2>&1 &
+  local tier="$1" brief="${2:-}" rc=0 sub tok
+  sub="$(uuidgen | tr 'A-Z' 'a-z')"
+  tok="$(mint_token "$tier" "$sub")"
+  AINARRES_TOKEN="$tok" harness_sweep "$tier" "$brief" >>"$RUN_DIR/$tier.log" 2>&1 &
   CURRENT_SWEEP_PID=$!
   wait "$CURRENT_SWEEP_PID" || rc=$?
   CURRENT_SWEEP_PID=""
+  release_stranded "$sub" "$tok"
   return "$rc"
 }
 

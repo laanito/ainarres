@@ -5,13 +5,17 @@
 # the substrate does that.
 #
 # Cast for v3 — worker TIERS in capability order (cheapest first):
-#   cheap-implementer  opencode + qwen3.6   role:implementer            (the default)
-#   frontier           grok + grok-build    designer/reviewer/integrator/escalated-impl
-# The driver sweeps the tiers IN THIS ORDER each round (see driver.sh): the cheap
-# tier drains the `implementing` work it can before the frontier runs, so the
-# frontier only picks up what's left (review/integrate + M12-escalated tasks the
-# cheap tier couldn't claim). Tiering — not concurrency — is what keeps the cheap
-# tier doing the heavy lifting and the frontier as the escalation ceiling.
+#   cheap-implementer     opencode + big-pickle        role:implementer  (primary, free API)
+#   fallback-implementer  opencode + nemotron-3-ultra  role:implementer  (fallback, free API)
+#   frontier              grok + grok-build            designer/reviewer/integrator/escalated-impl
+# The driver sweeps the tiers IN THIS ORDER each round (see driver.sh): each cheap
+# tier drains the `implementing` work it can before the next runs, so the fallback
+# only sees what the primary left (it down/depleted, or a task it failed) and the
+# frontier only sees what both cheap tiers couldn't finish (review/integrate +
+# M12-escalated tasks). Tiering — not concurrency — keeps the cheap tiers doing the
+# heavy lifting with the frontier as the escalation ceiling. (qwen3.6, the local
+# model, was dropped from the loop: it implemented correctly but didn't reliably
+# COMPLETE the loop — commit/advance/release — so it stranded tasks.)
 #
 # LOOP_MODE=mock swaps every harness for loop/mock-harness.sh (a deterministic
 # stand-in) and trims the frontier's implementer/tier:2 features so the mock test is
@@ -27,10 +31,10 @@ LOOP_MODE="${LOOP_MODE:-real}"           # real | mock
 RUN_DIR="${RUN_DIR:-$REPO/loop/run}"     # per-tier sweep logs (gitignored)
 
 # Worker tiers, ordered LOW→HIGH capability. The driver sweeps them in this order
-# each round. The two cheap tiers (qwen, then a free-API fallback) each get a turn
-# before a task escalates to the frontier (escalate_after = 2 on the dev implementing
-# stage): qwen does the work; the fallback covers qwen being down/slow/depleted AND
-# retries a task qwen failed; grok is the escalation ceiling.
+# each round. The two cheap (free-API) tiers each get a turn before a task escalates
+# to the frontier (escalate_after = 2 on the dev implementing stage): big-pickle does
+# the work; the nemotron fallback covers big-pickle being down/depleted AND retries a
+# task it failed; grok is the escalation ceiling.
 LOOP_TIERS=(cheap-implementer fallback-implementer frontier)
 
 # Token features per poller. The substrate trusts the signed token's features
@@ -55,8 +59,8 @@ role_features() {
 # Agent family (harness+model) for a poller — the durable identity (ADR 0007).
 role_family() {
   case "$1" in
-    cheap-implementer)    echo "opencode+qwen3.6" ;;
-    fallback-implementer) echo "opencode+big-pickle" ;;   # free, rate-limited API model
+    cheap-implementer)    echo "opencode+big-pickle" ;;        # primary cheap implementer (free API)
+    fallback-implementer) echo "opencode+nemotron-3-ultra" ;;  # fallback (free API, more capable)
     oversight)            echo "loop+driver" ;;
     *)                    echo "grok+grok-build" ;;   # frontier + designer hand-off
   esac
@@ -84,12 +88,14 @@ harness_sweep() {
   # The real harnesses are the wrapper scripts loop/{grok-frontier,opencode-implementer}.sh.
   # Override with OPENCODE_IMPLEMENTER_CMD / GROK_FRONTIER_CMD to swap in a different
   # invocation (e.g. another model). GROK_BRIEF carries the one-shot decomposition brief.
+  # Both cheap tiers run the same opencode wrapper with a different (free-API) model.
+  # Override the *_MODEL / *_CMD vars to swap models or invocation.
   case "$poller" in
     cheap-implementer)
-      eval "${OPENCODE_IMPLEMENTER_CMD:-bash \"$REPO/loop/opencode-implementer.sh\"}" ;;
+      OPENCODE_MODEL="${OPENCODE_PRIMARY_MODEL:-opencode/big-pickle}" \
+        eval "${OPENCODE_IMPLEMENTER_CMD:-bash \"$REPO/loop/opencode-implementer.sh\"}" ;;
     fallback-implementer)
-      # Same opencode wrapper, a different (free-API) model. Override either var to swap.
-      OPENCODE_MODEL="${OPENCODE_FALLBACK_MODEL:-opencode/big-pickle}" \
+      OPENCODE_MODEL="${OPENCODE_FALLBACK_MODEL:-openrouter/nvidia/nemotron-3-ultra-550b-a55b:free}" \
         eval "${OPENCODE_FALLBACK_CMD:-bash \"$REPO/loop/opencode-implementer.sh\"}" ;;
     frontier|designer)
       GROK_BRIEF="$brief" eval "${GROK_FRONTIER_CMD:-bash \"$REPO/loop/grok-frontier.sh\"}" ;;
@@ -98,12 +104,15 @@ harness_sweep() {
 }
 
 # Mint a token and print just the JWT. Operator holds JWT_SECRET (from loop.env).
+# Optional explicit sub (2nd arg) so the driver can later release a stranded claim
+# left by that worker (a fresh random sub is used when omitted).
 mint_token() {
-  local poller="$1" ttl="${2:-7200}"
+  local poller="$1" sub="${2:-}" ttl="${3:-7200}"
   "${AINARRES[@]}" token \
     --family "$(role_family "$poller")" \
     --role "$(role_pg "$poller")" \
     --features "$(role_features "$poller")" \
+    ${sub:+--sub "$sub"} \
     --ttl "$ttl" \
   | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).token))'
 }
