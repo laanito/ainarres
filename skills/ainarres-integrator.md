@@ -38,6 +38,12 @@ Repeat until `claim` reports `code:"empty"`:
      `feed`/`board` views — those are for oversight); `git fetch` it.
 
 2. **Integrate.** Bring the branch to the default branch as a real, merged PR:
+   - **Refuse empty work first.** `git fetch` then
+     `git diff --stat origin/<default-branch>...dev/<task.id>`. If the branch has **no
+     changes** against the default branch, do **not** open or merge a PR — there is nothing
+     to integrate. Send it back: `ainarres reject <task.id> --to implementing --reason
+     "empty branch — nothing to integrate"`. (Merging an empty PR is a silent no-op that
+     pollutes history; never do it.)
    - `git push` the branch if it isn't already on the remote.
    - `gh pr create` (title/body from the task `goal`/`instructions`) — capture the PR url.
    - When checks are green, merge it: `gh pr merge --squash --delete-branch` — capture the
@@ -68,6 +74,8 @@ Repeat until `claim` reports `code:"empty"`:
 - **The PR is the product; the task carries only a reference to it.** Always record
   `--pr` (and `--branch`/`--commit`) so the reviewer and the board can find your work.
 - **Never merge red.** If checks fail, reject back for rework — do not push past them.
+- **Never merge empty.** A branch with no diff against the default branch has nothing to
+  integrate — reject it back to implementing rather than merging a no-op PR.
 - **Don't fight the lease.** `lease_lost` → re-claim cleanly.
 - **Your capability is a boundary, not a convenience.** If `advance` ever returns
   `not_eligible`, the substrate is correctly refusing — investigate, don't work around it.

@@ -28,13 +28,22 @@ Repeat until `claim` reports `code:"empty"`:
 
    **At `reviewing`** (pre-integration code review):
    - Check out the implementer's branch and read the diff against the default branch.
+   - **First gate — the change must exist.** Run `git diff --stat <default-branch>...dev/<task.id>`.
+     If it is **empty** (no files changed), reject immediately:
+     `ainarres reject <task.id> --to implementing --reason "empty branch — no change to review"`.
+     An empty branch is never a pass, no matter what `validate` reports (see next bullet).
    - Confirm it does what `instructions`/`acceptance` asked — and nothing reckless.
    - **Independently run the task's *substrate-free* `validate`** (don't trust the
      implementer's word) — the targeted unit test / `node --check`, which must exit 0. Do
      NOT run the full test suite here: dev tasks share one live substrate and the full
      suite's DB fixtures corrupt other lanes. Full-suite regression is the `validating`
      stage below (on a clean rebuild), by design.
-   - **Pass** → `ainarres advance <task.id> --to integrating --note "review ok, validated"`.
+   - **A green `validate` is necessary, not sufficient.** A `validate` can pass *vacuously*
+     — e.g. it asserts behaviour the default branch *already* has, so it would pass even on
+     an empty branch. Confirm the **diff actually delivers** what the task asked: the new
+     code/test is present in *this* branch, not merely already on `main`. If the diff
+     doesn't implement the task, reject even when `validate` exits 0.
+   - **Pass** → `ainarres advance <task.id> --to integrating --note "review ok, validated, non-empty diff"`.
    - **Problems** → `ainarres reject <task.id> --to implementing --reason "<specific, actionable>"`.
      Rework goes back to an implementer.
 
@@ -48,6 +57,9 @@ Repeat until `claim` reports `code:"empty"`:
 
 - **Verify, don't trust.** Always re-run `validate` / the test command yourself. A review
   that didn't run the code isn't a review.
+- **No empty changes pass.** A branch with an empty diff against the default branch is an
+  automatic reject — a passing `validate` on an empty branch means the check was vacuous,
+  not that work was done.
 - **Reject with a reason an implementer can act on** — name the file, the failing case, the
   missing piece. Vague rejects waste a rework cycle.
 - **Two stages, one skill.** `reviewing` is "is this change good?"; `validating` is "is the

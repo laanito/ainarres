@@ -34,7 +34,10 @@ Repeat until `claim` reports `code:"empty"`:
    - Fails → fix and re-run. Try a few times.
    - Can't pass after a real effort → return it: `ainarres release <task.id> --reason "<what blocked you>"` and go to step 1.
 
-5. **Hand to review**: commit and push your branch, then record it and advance:
+5. **Hand to review**: commit and push your branch, then record it and advance.
+   First **confirm you actually changed something** — `git diff --stat <default-branch>...HEAD`
+   must be non-empty. If it's empty you haven't done the work (a green `validate` can be
+   vacuous — the base branch may already satisfy it); keep working, don't advance.
    ```
    git add -A && git commit -m "<task goal>" && git push -u origin dev/<task.id>
    ainarres advance <task.id> --to reviewing --note "validate passes" --branch dev/<task.id>

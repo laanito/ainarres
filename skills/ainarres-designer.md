@@ -80,4 +80,11 @@ move on an `implementing` task) — stop. Come back when dependents become ready
   **Do NOT make `validate` the whole test suite:** dev tasks share one live substrate, and a
   full suite's DB-backed fixtures corrupt the other lanes' state. Full-suite regression is the
   **`validating`** stage's job (a clean rebuild on `main`), not the per-task check.
+- **`validate` must be *discriminating* — it must FAIL on the base branch and pass only after
+  the change.** A check that the default branch *already* satisfies (e.g. "run `ainarres
+  version`" when a `version` command might already exist, or asserting behaviour that's
+  already present) passes *vacuously* — it would go green on an empty branch and let no-op
+  work through. Prefer a validate that runs the task's **new** test file (which doesn't exist
+  until the implementer adds it), so an empty branch fails it. If you can't write a validate
+  that fails without the change, the task is mis-specified.
 - **Don't fight the lease.** `lease_lost` → re-`claim`.
