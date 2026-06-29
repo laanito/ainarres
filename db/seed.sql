@@ -356,7 +356,9 @@ on conflict (family_id, feature_id) do nothing;
 -- now it also claims escalated `implementing` tasks (role:implementer + tier:2). The
 -- cheap implementers (qwen3.6, big-pickle, nemotron-*) hold no tier:2, so a task
 -- escalated to require tier:2 routes to grok. Implementing tasks escalate after the
--- first failed attempt (escalate_after = 1 < max_attempts = 3).
+-- SECOND failed attempt (escalate_after = 2 < max_attempts = 3): the loop runs two
+-- cheap tiers (qwen, then a fallback opencode implementer), so each gets one attempt
+-- before the task escalates to the frontier — cheap tiers first, grok as the ceiling.
 -- NB: nemotron-3-ultra (550B, free) is a candidate to ALSO hold tier:2 as a free
 -- escalation target — a one-line grant when we choose to trust it (roadmap / v3-plan).
 insert into app.features (kind, key) values ('tier', '2')
@@ -369,7 +371,7 @@ join app.features ft on ft.name = any (array['role:implementer', 'tier:2'])
 where f.key = 'grok+grok-build'
 on conflict (family_id, feature_id) do nothing;
 
-update app.stages set escalate_after = 1
+update app.stages set escalate_after = 2
 where key = 'implementing'
   and workflow_id = (select id from app.workflows where key = 'ainarres-dev');
 

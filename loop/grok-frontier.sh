@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# loop/grok-frontier.sh — ONE sweep of the grok frontier poller (ADR 0020).
+# loop/grok-frontier.sh — ONE grok sweep (ADR 0020), in one of two modes:
 #
-# Covers designer / reviewer / integrator (+ the escalated tier:2 implementer).
-# The role for a given task is decided by its stage; grok reads the matching role
-# skill and acts. If GROK_BRIEF is set (the driver's one-shot decomposition pass),
-# grok first acts as designer to turn that brief into dev-lane tasks.
+#   GROK_BRIEF set   → DESIGNER-ONLY: decompose the brief into tasks and shepherd them
+#                      to `implementing`, then stop. It deliberately does NOT implement/
+#                      review/integrate — otherwise it carries the whole feature to
+#                      `done` in the decompose pass and starves the cheap implementer
+#                      tier (the bug behind qwen never getting an implementing task).
+#   GROK_BRIEF unset → frontier worker: reviewer / integrator / validating, plus the
+#                      ESCALATED implementer (tier:2) for tasks the cheap tier left.
 #
 # OWNER-RUN by design: this spawns `grok --always-approve`, which performs real
 # git/gh egress at the integrate stage. Claude Code CANNOT run it — the auto-mode
@@ -31,44 +34,62 @@ if [ -z "$GROK" ]; then
 fi
 [ -x "$GROK" ] || command -v "$GROK" >/dev/null 2>&1 || { echo "grok-frontier: '$GROK' is not executable" >&2; exit 2; }
 
-# Static instructions — QUOTED heredoc so nothing here expands (the token never
-# leaks into argv; grok reads it from its inherited env).
-PROMPT="$(cat <<'EOF'
-You are an AINARRES frontier agent on the `dev` lane. Your API token is in the
-AINARRES_TOKEN env var and the substrate base URL is in AINARRES_BASE_URL (both
-already set in your environment — do not print them). The CLI is
-`node bin/ainarres.mjs <verb>`; every call prints one JSON line (ok:true, or
-ok:false with code+reason). Do ONLY what the role skills say.
+# TWO mutually-exclusive modes (QUOTED heredocs so nothing expands — the token
+# never leaks into argv; grok reads it from its inherited env):
+#
+#   GROK_BRIEF set  → DESIGNER-ONLY decomposition. Create tasks + shepherd them to
+#                     `implementing`, then STOP. It must NOT implement/review/integrate
+#                     — if it did, it would carry the whole feature to `done` itself,
+#                     starving the cheap implementer tier (the bug this fixes).
+#   GROK_BRIEF unset → the frontier worker loop: reviewer/integrator/validating, plus
+#                     the ESCALATED implementer (tier:2) for tasks the cheap tier left.
+if [ -n "${GROK_BRIEF:-}" ]; then
+  PROMPT="$(cat <<'EOF'
+You are an AINARRES DESIGNER on the `dev` lane (decomposition only this run). Your API
+token is in AINARRES_TOKEN and the base URL in AINARRES_BASE_URL (both set; do not print
+them). CLI: `node bin/ainarres.mjs <verb>` — each call prints one JSON line (ok:true, or
+ok:false with code+reason). Read skills/ainarres-designer.md and follow it exactly.
+
+Decompose the feature brief (path below) into the SMALLEST set of self-contained
+dev-lane tasks. Create each with
+`node bin/ainarres.mjs create --lane dev --payload '{...}'` (goal, instructions, files,
+a SUBSTRATE-FREE validate, acceptance; --depends-on for ordering). Then shepherd ready
+tasks proposed -> designing -> implementing until `claim` returns "empty", then STOP.
+
+Do ONLY design. Do NOT implement, review, or integrate — separate worker tiers own
+`implementing`, `reviewing`, and `integrating`. Leaving tasks AT `implementing` is the
+correct, complete result of this run. Never invent stages.
+
+Feature brief is at this path:
+EOF
+)"
+  PROMPT="$PROMPT $GROK_BRIEF"
+else
+  PROMPT="$(cat <<'EOF'
+You are an AINARRES frontier worker on the `dev` lane. Your API token is in
+AINARRES_TOKEN and the base URL in AINARRES_BASE_URL (both set; do not print them). CLI:
+`node bin/ainarres.mjs <verb>` — each call prints one JSON line (ok:true, or ok:false
+with code+reason). Do ONLY what the role skills say.
 
 Read the role skills you may need this sweep:
-  - skills/ainarres-designer.md    (stages: proposed, designing)
   - skills/ainarres-reviewer.md    (stages: reviewing, validating)
   - skills/ainarres-integrator.md  (stage:  integrating)
+  - skills/ainarres-implementer.md (stage:  implementing — only ESCALATED tier:2 tasks
+                                    reach you; the cheap tier does normal implementing)
 
 Then run this loop until done:
   1. node bin/ainarres.mjs claim --lane dev
   2. if code is "empty" -> stop; you are done.
   3. otherwise read task.stage_key and act as the role that owns that stage, per its
      skill, doing the REAL work:
-       - integrating  -> real git push + gh PR create/merge, then advance to validating
+       - integrating          -> real git push + gh PR create/merge, then advance
        - reviewing/validating -> re-run the task's SUBSTRATE-FREE validate yourself
-       - proposed/designing   -> shepherd one stage forward
+       - implementing         -> implement it (an escalated task the cheap tier couldn't)
      then make exactly the advance/reject the skill specifies.
   4. go to 1.
-Never invent stages and never skip the task's validate. One task at a time.
+Never invent stages, never skip the task's validate. One task at a time.
 EOF
 )"
-
-# The decomposition pass (driver hands the brief to a designer) only when set.
-if [ -n "${GROK_BRIEF:-}" ]; then
-  PROMPT="$PROMPT
-
-BEFORE the loop, act as designer: read the feature brief at the path '$GROK_BRIEF'
-and decompose it into the smallest set of self-contained dev-lane tasks per
-skills/ainarres-designer.md. Create each with
-\`node bin/ainarres.mjs create --lane dev --payload '{...}'\` (goal, instructions,
-files, a SUBSTRATE-FREE validate command, acceptance; use --depends-on for ordering).
-Then shepherd ready tasks proposed->designing->implementing until claim is empty."
 fi
 
 exec "$GROK" -p "$PROMPT" --model "$MODEL" --always-approve --output-format json

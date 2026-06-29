@@ -1,0 +1,14 @@
+Show the task count in the `ainarres status` header line.
+
+- In the pure `formatStatus()` function in bin/ainarres.mjs, append the board task
+  count to the header line: `status — lane dev (N tasks)` (lane case) and
+  `status — all lanes (N tasks)` (no-lane case), where N is `board.length`. Always
+  show it, including `(0 tasks)`.
+- Touch only bin/ainarres.mjs (the formatStatus function) and test/status-format.test.ts.
+  No CLI flags, no network, no database — formatStatus takes already-fetched rows.
+- Extend test/status-format.test.ts with a NEW assertion: the header line contains the
+  correct `(N tasks)` count for a given board. The assertion must FAIL on current main
+  (the header has no count yet) and pass after the change.
+
+Per-task validate (substrate-free, discriminating — fails on main, passes after the
+change): `npx vitest run test/status-format.test.ts`. Do not run the full suite.

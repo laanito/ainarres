@@ -20,15 +20,19 @@ loop/
 
 | Tier | Harness / family | Role(s) |
 |---|---|---|
-| `cheap-implementer` | `opencode + qwen3.6` | implementer (the default) |
+| `cheap-implementer` | `opencode + qwen3.6` (local) | implementer (the default) |
+| `fallback-implementer` | `opencode + big-pickle` (free API) | implementer (fallback for qwen) |
 | `frontier` | `grok + grok-build` | designer, reviewer, integrator, **escalated** implementer (`tier:2`) |
 
 The driver sweeps the tiers **in this order, in rounds** (`roles.sh::LOOP_TIERS`).
-Because the cheap tier runs to "nothing claimable" *before* the frontier runs each
-round, the cheap implementer claims `implementing` work first — the frontier only
-picks up what's left: review/integrate, and M12-escalated tasks the cheap tier
-couldn't claim (`tier:2`). **Tiering, not concurrency**, is what keeps the cheap tier
-doing the heavy lifting and the frontier as the escalation ceiling — and it avoids
+Because each cheap tier runs to "nothing claimable" *before* the next runs, the local
+qwen implementer claims `implementing` work first; the **fallback** opencode model
+(swap via `OPENCODE_FALLBACK_MODEL`) covers qwen being down/slow/depleted **and**
+retries a task qwen failed — both before the task escalates. The frontier only picks
+up what's left: review/integrate, and M12-escalated tasks the cheap tiers couldn't
+finish (`tier:2`). The dev `implementing` stage uses `escalate_after = 2`, so both
+cheap tiers get an attempt before grok. **Tiering, not concurrency**, keeps the cheap
+tiers doing the heavy lifting with the frontier as the escalation ceiling — and avoids
 the race where a concurrent frontier poller would grab implementing work first.
 
 Token features per tier live in `roles.sh::role_features` and are authoritative for
