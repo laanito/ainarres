@@ -125,6 +125,10 @@ export function formatStatus({ board = [], feed = [], abandoned = [] }, { lane =
     lines.push(`  total: ${board.length}`);
   }
 
+  // blocked count (always emitted, even when 0)
+  const blockedCount = board.filter(r => r.blocked === true).length;
+  lines.push(`  blocked: ${blockedCount}`);
+
   // 3. Abandoned section.
   lines.push(`abandoned (${abandoned.length}):`);
   if (abandoned.length === 0) {
