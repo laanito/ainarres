@@ -73,4 +73,32 @@ describe("formatStatus", () => {
     const out = formatStatus({ board });
     expect(out).toContain("  blocked: 2");
   });
+
+  test("lists blocked task ids indented after the blocked: N line, in board order; no list when zero", () => {
+    const boardWithBlocked = [
+      { task_id: "a1", stage: "implementing", blocked: false },
+      { task_id: "b2", stage: "reviewing", blocked: true },
+      { task_id: "c3", stage: "integrating", blocked: true },
+      { task_id: "d4", stage: "done", blocked: false },
+    ];
+    const outWith = formatStatus({ board: boardWithBlocked });
+    expect(outWith).toContain("  blocked: 2");
+    // must be immediately after the blocked line, in board appearance order
+    const blockedIdx = outWith.indexOf("  blocked: 2");
+    const b2Idx = outWith.indexOf("  - b2");
+    const c3Idx = outWith.indexOf("  - c3");
+    expect(b2Idx).toBeGreaterThan(blockedIdx);
+    expect(c3Idx).toBeGreaterThan(b2Idx);
+    // d4 and a1 must not appear under blocked
+    expect(outWith).not.toContain("  - a1");
+    expect(outWith).not.toContain("  - d4");
+
+    const boardNoBlocked = [
+      { task_id: "x1", stage: "implementing", blocked: false },
+      { task_id: "x2", stage: "reviewing" },
+    ];
+    const outNo = formatStatus({ board: boardNoBlocked });
+    expect(outNo).toContain("  blocked: 0");
+    expect(outNo).not.toContain("  - ");
+  });
 });
