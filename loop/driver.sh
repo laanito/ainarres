@@ -104,8 +104,12 @@ fi
 # 1. Decompose once (designer = frontier family). Skipped on a resume (board has
 #    tasks already), so re-running never re-decomposes into duplicates.
 read -r active blocked <<<"$(counts)"
-if [ "$active" -gt 0 ] || [ "$blocked" -gt 0 ]; then
-  echo "→ driver: board already has ${active} active / ${blocked} blocked task(s) — RESUMING (skipping decomposition)."
+if [ "$active" -gt 0 ]; then
+  echo "→ driver: board already has ${active} active task(s) — RESUMING (skipping decomposition)."
+elif [ "$blocked" -gt 0 ]; then
+  echo "driver: board has ${blocked} blocked task(s) and no active work — a previous run needs attention." >&2
+  echo "        reset the loop board (make loop-reset) or unblock before starting a new feature." >&2
+  exit 1
 else
   echo "→ driver: handing the brief to a designer (one decomposition pass)…"
   run_sweep designer "$BRIEF_FILE" \
