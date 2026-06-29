@@ -1,0 +1,15 @@
+List the blocked task ids in the `ainarres status` output.
+
+- In the pure `formatStatus()` function in bin/ainarres.mjs, right AFTER the existing
+  "blocked: N" summary line: when N > 0, list each blocked task on its own indented
+  line `  - <task_id>` (one per board row whose `blocked === true`, in board order).
+  When N is 0, print no list (just the existing "blocked: 0" line, unchanged).
+- Touch only bin/ainarres.mjs (the formatStatus function) and test/status-format.test.ts.
+  No CLI flags, no network, no database — formatStatus takes already-fetched rows.
+- Extend test/status-format.test.ts with a NEW assertion: given board rows where some
+  have blocked:true, the output lists those task ids under the blocked line. The
+  assertion must FAIL on current main (the list doesn't exist yet) and pass after the
+  change.
+
+Per-task validate (substrate-free, discriminating — fails on main, passes after the
+change): `npx vitest run test/status-format.test.ts`. Do not run the full suite.
