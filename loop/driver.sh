@@ -32,7 +32,18 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 
 # Point the CLI at the loop substrate (ADR 0020 isolation) and load run config.
-set -a; source "$REPO/loop.env"; set +a
+# Source loop.env for the values the driver needs, but export ONLY what the harness
+# children should inherit: AINARRES_BASE_URL (the CLI's loop-substrate target) and
+# JWT_SECRET (token minting). CRUCIALLY do NOT export COMPOSE_PROJECT_NAME (or the
+# ports): if a harness inherited COMPOSE_PROJECT_NAME=ainarres-loop, an agent running
+# `make reset` at the `validating` stage would target the LOOP compose project — tear
+# down the live loop board mid-run and let the test suite's dev fixtures repopulate it
+# (exactly the M11 pollution, via a new vector — observed wiping a done task). Keeping
+# it unexported preserves M13 isolation: an agent's `make reset` hits the default
+# `ainarres` (test) project, never the loop.
+# shellcheck disable=SC1090,SC1091
+source "$REPO/loop.env"
+export AINARRES_BASE_URL JWT_SECRET
 source "$HERE/roles.sh"
 
 LOOP_MAX_ROUNDS="${LOOP_MAX_ROUNDS:-20}"   # safety bound (full no-progress detection ends it sooner)
