@@ -48,7 +48,7 @@ while true; do
   case "$POLLER:$stage" in
     designer:proposed)      ai advance "$id" --to designing   --note "mock: design start" >/dev/null ;;
     designer:designing)     ai advance "$id" --to implementing --note "mock: spec ready"  >/dev/null ;;
-    cheap-implementer:implementing)
+    cheap-implementer:implementing|fallback-implementer:implementing)
                             ai advance "$id" --to reviewing    --note "mock: implemented" --branch "dev/$id" >/dev/null ;;
     frontier:reviewing)     ai advance "$id" --to integrating  --note "mock: review ok" >/dev/null ;;
     frontier:integrating)   ai advance "$id" --to validating   --note "mock: merged" \

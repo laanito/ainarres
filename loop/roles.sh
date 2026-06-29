@@ -26,15 +26,20 @@ LOOP_LANE="dev"
 LOOP_MODE="${LOOP_MODE:-real}"           # real | mock
 RUN_DIR="${RUN_DIR:-$REPO/loop/run}"     # per-tier sweep logs (gitignored)
 
-# Worker tiers, ordered LOW→HIGH capability. The driver sweeps them in this order.
-LOOP_TIERS=(cheap-implementer frontier)
+# Worker tiers, ordered LOW→HIGH capability. The driver sweeps them in this order
+# each round. The two cheap tiers (qwen, then a free-API fallback) each get a turn
+# before a task escalates to the frontier (escalate_after = 2 on the dev implementing
+# stage): qwen does the work; the fallback covers qwen being down/slow/depleted AND
+# retries a task qwen failed; grok is the escalation ceiling.
+LOOP_TIERS=(cheap-implementer fallback-implementer frontier)
 
 # Token features per poller. The substrate trusts the signed token's features
 # (minus denials) — ADR 0007 — so this is the authoritative capability grant for
 # the run. In mock mode the frontier drops implementer/tier:2 (see header).
 role_features() {
   case "$1" in
-    cheap-implementer) echo "lane:dev,role:implementer" ;;
+    cheap-implementer)    echo "lane:dev,role:implementer" ;;
+    fallback-implementer) echo "lane:dev,role:implementer" ;;  # same role, different (free-API) model
     frontier)
       if [ "$LOOP_MODE" = "mock" ]; then
         echo "lane:dev,role:designer,role:reviewer,role:integrator,capability:integrate"
@@ -50,9 +55,10 @@ role_features() {
 # Agent family (harness+model) for a poller — the durable identity (ADR 0007).
 role_family() {
   case "$1" in
-    cheap-implementer) echo "opencode+qwen3.6" ;;
-    oversight)         echo "loop+driver" ;;
-    *)                 echo "grok+grok-build" ;;   # frontier + designer hand-off
+    cheap-implementer)    echo "opencode+qwen3.6" ;;
+    fallback-implementer) echo "opencode+big-pickle" ;;   # free, rate-limited API model
+    oversight)            echo "loop+driver" ;;
+    *)                    echo "grok+grok-build" ;;   # frontier + designer hand-off
   esac
 }
 
@@ -81,6 +87,10 @@ harness_sweep() {
   case "$poller" in
     cheap-implementer)
       eval "${OPENCODE_IMPLEMENTER_CMD:-bash \"$REPO/loop/opencode-implementer.sh\"}" ;;
+    fallback-implementer)
+      # Same opencode wrapper, a different (free-API) model. Override either var to swap.
+      OPENCODE_MODEL="${OPENCODE_FALLBACK_MODEL:-opencode/big-pickle}" \
+        eval "${OPENCODE_FALLBACK_CMD:-bash \"$REPO/loop/opencode-implementer.sh\"}" ;;
     frontier|designer)
       GROK_BRIEF="$brief" eval "${GROK_FRONTIER_CMD:-bash \"$REPO/loop/grok-frontier.sh\"}" ;;
     *) echo "roles.sh: no real harness for poller '$poller'" >&2; return 2 ;;
