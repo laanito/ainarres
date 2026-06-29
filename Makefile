@@ -99,8 +99,15 @@ verify-isolation:
 
 ## Run the loop on a real brief with the real harnesses (owner-invoked — Claude
 ## Code cannot spawn grok; see loop/README.md). Usage: make loop-run BRIEF=path
+## Starts from a FRESH loop board by default (the board is disposable per-feature;
+## the product is the merged PR on git). This avoids resuming a dead/interrupted
+## run's stranded claims. Pass LOOP_RESUME=1 to keep the board and continue.
 loop-run:
 	@test -n "$(BRIEF)" || { echo "usage: make loop-run BRIEF=<brief-file>"; exit 2; }
+	@if [ -z "$(LOOP_RESUME)" ]; then \
+	  echo "→ loop-run: fresh board (LOOP_RESUME=1 to continue an interrupted run)"; \
+	  $(MAKE) --no-print-directory loop-reset >/dev/null; \
+	fi
 	@bash loop/driver.sh "$(BRIEF)"
 
 ## Deterministic plumbing test: a fresh loop substrate + the MOCK harness drive a

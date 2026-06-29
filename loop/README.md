@@ -58,6 +58,13 @@ make loop-up && make loop-seed          # bring up the isolated loop substrate (
 make loop-run BRIEF=path/to/feature-brief.txt
 ```
 
+`loop-run` starts from a **fresh board** by default (it resets the loop substrate
+first) — the board is disposable per-feature, so this avoids resuming a previous,
+interrupted run's stranded claims (a worker that died mid-task holds its claim until
+its lease expires). To deliberately continue an interrupted run instead, pass
+`LOOP_RESUME=1 make loop-run BRIEF=…` (the driver then skips decomposition and resumes
+the existing board).
+
 The harness wrappers (`grok-frontier.sh`, `opencode-implementer.sh`) resolve their
 binaries themselves (no PATH wiring needed); override with `GROK_FRONTIER_CMD` /
 `OPENCODE_IMPLEMENTER_CMD` (or `GROK_BIN`/`OPENCODE_BIN`, `*_MODEL`) to swap in a
