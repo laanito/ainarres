@@ -101,4 +101,28 @@ describe("formatStatus", () => {
     expect(outNo).toContain("  blocked: 0");
     expect(outNo).not.toContain("  - ");
   });
+
+  test("claimed count line is emitted after the blocked section and before abandoned; counts non-null claimed_by; always emitted even at 0", () => {
+    const boardWithClaimed = [
+      { task_id: "t1", stage: "implementing", claimed_by: "agent-1" },
+      { task_id: "t2", stage: "implementing", claimed_by: null },
+      { task_id: "t3", stage: "reviewing", claimed_by: "agent-2" },
+      { task_id: "t4", stage: "reviewing" },
+    ];
+    const out = formatStatus({ board: boardWithClaimed });
+    expect(out).toContain("  claimed: 2");
+    // must appear after blocked section, before abandoned
+    const blockedIdx = out.indexOf("  blocked:");
+    const claimedIdx = out.indexOf("  claimed: 2");
+    const abandonedIdx = out.indexOf("abandoned (");
+    expect(claimedIdx).toBeGreaterThan(blockedIdx);
+    expect(abandonedIdx).toBeGreaterThan(claimedIdx);
+
+    const boardNoClaimed = [
+      { task_id: "x1", stage: "implementing" },
+      { task_id: "x2", stage: "reviewing", claimed_by: null },
+    ];
+    const outNo = formatStatus({ board: boardNoClaimed });
+    expect(outNo).toContain("  claimed: 0");
+  });
 });

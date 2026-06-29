@@ -136,6 +136,10 @@ export function formatStatus({ board = [], feed = [], abandoned = [] }, { lane =
     }
   }
 
+  // claimed count (always emitted, even when 0)
+  const claimedCount = board.filter(r => r.claimed_by != null).length;
+  lines.push(`  claimed: ${claimedCount}`);
+
   // 3. Abandoned section.
   lines.push(`abandoned (${abandoned.length}):`);
   if (abandoned.length === 0) {
