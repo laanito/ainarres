@@ -80,4 +80,27 @@ coordination machinery; the owner runs the stochastic, egress-capable harnesses.
   correctly; if it ever matters, give the frontier implementer-hat its own poller with
   a claim cadence behind the cheap one.
 
+## Shakeout findings (first real run, owner-driven)
+
+The owner ran `make loop-run` with the real harnesses. It **shipped `ainarres version`
+to `main` hands-off** (PR #33 — real diff, working) — the frontier+integrator path works
+end to end. Three findings, two fixed here:
+
+1. **Real harnesses were unwired** — `roles.sh` had `:?` placeholder guards, so the first
+   run failed at decomposition. Fixed: concrete `loop/grok-frontier.sh` (grok doesn't
+   auto-discover repo skills — confirmed via `grok inspect` — so the prompt has it *read*
+   the role skills) + `loop/opencode-implementer.sh`.
+2. **Re-running re-decomposed the brief** → duplicate tasks (and one empty duplicate PR,
+   #34). Fixed: the driver now **auto-resumes** (skips decomposition when the board already
+   has tasks).
+3. **An empty branch passed review and got merged** (#34, a no-op). Two root causes,
+   addressed in the role skills (separate PR): a **vacuous `validate`** ("run `ainarres
+   version`" passed even on an empty branch because `main` already had it after #33), and
+   **no empty-diff guard**. Hardened: designer requires a *discriminating* validate (must
+   fail on base); implementer/reviewer/integrator reject an empty diff.
+
+Still untested live: the **cheap→escalation** path — opencode wasn't on PATH, so grok (which
+holds `role:implementer`) did the implementing. A follow-up run with opencode reachable and a
+fresh, non-duplicate brief (`loop/examples/blocked-count-brief.txt`) exercises qwen.
+
 **Blog:** "A driver that doesn't drive: starting the loop without conducting it."

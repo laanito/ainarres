@@ -1,0 +1,15 @@
+Add a "blocked: N" summary line to the `ainarres status` oversight output.
+
+- In the pure `formatStatus()` function in bin/ainarres.mjs, after the per-stage
+  task counts and before the "abandoned" section, print one line `  blocked: N`
+  where N is the number of board rows whose `blocked` field is true. When N is 0,
+  still print `  blocked: 0`.
+- Touch only bin/ainarres.mjs (the formatStatus function) and the test file below.
+  No CLI flags, no network, no database — formatStatus takes already-fetched rows.
+- Extend test/status-format.test.ts with a NEW assertion: given board rows where
+  some have blocked:true, the formatted output contains the correct `blocked: N`
+  line. This assertion must FAIL on the current main (the line doesn't exist yet)
+  and pass after the change.
+
+Per-task validate (substrate-free, discriminating — fails on main, passes after the
+change): `npx vitest run test/status-format.test.ts`. Do not run the full suite.
