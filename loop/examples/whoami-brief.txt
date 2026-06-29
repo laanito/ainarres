@@ -1,0 +1,30 @@
+Add an `ainarres whoami` subcommand that prints the identity in the bearer token.
+
+A JWT is three base64url segments joined by dots: header.payload.signature. The
+payload is a base64url-encoded JSON object of claims (the CLI's `token` command mints
+exactly this). `whoami` decodes that payload locally and prints the caller's identity
+— no network, no database, no signature verification needed.
+
+Implement in bin/ainarres.mjs (only this file + the new test):
+
+1. Export a PURE function `decodeClaims(token)`:
+   - Split the token on ".", take the middle segment (the payload).
+   - Decode it: `Buffer.from(segment, "base64url").toString("utf8")`, then `JSON.parse`.
+   - Return the resulting claims object.
+   - Export it the same way `formatStatus` is exported (so it is unit-testable without
+     a running substrate).
+
+2. Add a `whoami` command (in the COMMANDS map, OPTS, and the USAGE text, matching the
+   style of the existing subcommands). It reads the bearer token (AINARRES_TOKEN env or
+   --token, like the other commands), calls `decodeClaims`, and prints one JSON line
+   with `{ sub, family, role, features }` from the claims. It needs no network call.
+
+3. Add a NEW test file test/whoami.test.ts that imports `decodeClaims` from
+   bin/ainarres.mjs and asserts it returns the expected claims for a hand-built token
+   (e.g. construct `header.payload.sig` where payload is
+   `Buffer.from(JSON.stringify({sub:"s1",family:"f1",role:"agent",features:["lane:dev"]})).toString("base64url")`
+   and assert the decoded object matches). This test must FAIL on current main
+   (`decodeClaims` does not exist yet) and pass after the change.
+
+Per-task validate (substrate-free, discriminating — fails on main, passes after the
+change): `npx vitest run test/whoami.test.ts`. Do not run the full suite.
