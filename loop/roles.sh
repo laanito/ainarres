@@ -77,13 +77,14 @@ harness_sweep() {
     bash "$REPO/loop/mock-harness.sh" "$poller" "$brief"
     return $?
   fi
+  # The real harnesses are the wrapper scripts loop/{grok-frontier,opencode-implementer}.sh.
+  # Override with OPENCODE_IMPLEMENTER_CMD / GROK_FRONTIER_CMD to swap in a different
+  # invocation (e.g. another model). GROK_BRIEF carries the one-shot decomposition brief.
   case "$poller" in
     cheap-implementer)
-      : "${OPENCODE_IMPLEMENTER_CMD:?set OPENCODE_IMPLEMENTER_CMD to run the real opencode implementer (see loop/README.md)}"
-      eval "$OPENCODE_IMPLEMENTER_CMD" ;;
+      eval "${OPENCODE_IMPLEMENTER_CMD:-bash \"$REPO/loop/opencode-implementer.sh\"}" ;;
     frontier|designer)
-      : "${GROK_FRONTIER_CMD:?set GROK_FRONTIER_CMD to run the real grok frontier poller (see loop/README.md)}"
-      GROK_BRIEF="$brief" eval "$GROK_FRONTIER_CMD" ;;
+      GROK_BRIEF="$brief" eval "${GROK_FRONTIER_CMD:-bash \"$REPO/loop/grok-frontier.sh\"}" ;;
     *) echo "roles.sh: no real harness for poller '$poller'" >&2; return 2 ;;
   esac
 }
