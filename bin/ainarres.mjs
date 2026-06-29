@@ -12,6 +12,7 @@
 import { createHmac, randomUUID } from "node:crypto";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 
 const BASE = (process.env.AINARRES_BASE_URL || "http://localhost:3010").replace(/\/$/, "");
 const SECRET = process.env.JWT_SECRET || "ainarres-dev-only-secret-change-me-min-32-chars";
@@ -169,6 +170,14 @@ const COMMANDS = {
     emit({ token: mintJwt(claims, values.ttl ? Number(values.ttl) : 900), claims });
   },
 
+  // Prints the version from package.json on a single line. No token, no network,
+  // no DB. Follows the plain-output style of status (and the no-token style of token).
+  version() {
+    const pkgPath = fileURLToPath(new URL("../package.json", import.meta.url));
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+    process.stdout.write(`ainarres ${pkg.version}\n`);
+  },
+
   create(rest, values, token) {
     const payload = values.payload ? JSON.parse(values.payload) : {};
     if (values.instructions) payload.instructions = values.instructions;
@@ -294,6 +303,7 @@ const OPTS = {
 const USAGE = `ainarres — agent CLI (verbs over PostgREST)
 
   token   --family F --role R --features a,b [--sub S] [--ttl 900]
+  version   print CLI version (from package.json; no token)
   create  --lane L [--instructions T --entry F --validate CMD | --payload JSON] [--priority N] [--subject UUID] [--depends-on ID,ID]
   claim   [--lane L]
   progress  <task-id> [--note T] [--artifact PATH ...] [--pr URL --branch NAME --commit SHA]
@@ -321,12 +331,12 @@ if (isMain) {
   }
   if (!COMMANDS[cmd]) fail(`unknown command '${cmd}'. Try 'ainarres help'.`);
 
-  if (cmd === "token") {
-    COMMANDS.token(rest);
+  if (cmd === "token" || cmd === "version") {
+    COMMANDS[cmd](rest);
   } else {
     const { values, positionals } = args(rest, OPTS[cmd]);
     const token = bearer(values);
-    const needsToken = !["token"].includes(cmd);
+    const needsToken = !["token", "version"].includes(cmd);
     if (needsToken && !token) fail(`${cmd}: no token (set AINARRES_TOKEN or pass --token)`);
     await COMMANDS[cmd](rest, values, token, positionals[0]);
   }
