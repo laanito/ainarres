@@ -49,14 +49,22 @@ if ! ai board --lane "$LOOP_LANE" --token "$OVERSIGHT_TOKEN" >/dev/null 2>&1; th
   exit 2
 fi
 
-echo "→ driver: handing the brief to a designer (one decomposition pass)…"
-AINARRES_TOKEN="$(mint_token designer)" harness_sweep designer "$BRIEF_FILE" \
-  >"$RUN_DIR/decompose.log" 2>&1 || { echo "driver: decomposition failed (see $RUN_DIR/decompose.log)" >&2; exit 1; }
+# Decomposition is the one step that creates tasks, so it must run AT MOST once per
+# feature. If the board already has dev tasks (a resume after an interrupted run),
+# skip it — re-running the driver then just continues against the existing board.
 read -r active blocked <<<"$(counts)"
-echo "  ✓ board seeded: ${active} active, ${blocked} blocked dev task(s)"
-if [ "$active" -eq 0 ] && [ "$blocked" -eq 0 ]; then
-  echo "driver: designer created no tasks — nothing to run." >&2
-  exit 1
+if [ "$active" -gt 0 ] || [ "$blocked" -gt 0 ]; then
+  echo "→ driver: board already has ${active} active / ${blocked} blocked dev task(s) — RESUMING (skipping decomposition)."
+else
+  echo "→ driver: handing the brief to a designer (one decomposition pass)…"
+  AINARRES_TOKEN="$(mint_token designer)" harness_sweep designer "$BRIEF_FILE" \
+    >"$RUN_DIR/decompose.log" 2>&1 || { echo "driver: decomposition failed (see $RUN_DIR/decompose.log)" >&2; exit 1; }
+  read -r active blocked <<<"$(counts)"
+  echo "  ✓ board seeded: ${active} active, ${blocked} blocked dev task(s)"
+  if [ "$active" -eq 0 ] && [ "$blocked" -eq 0 ]; then
+    echo "driver: designer created no tasks — nothing to run." >&2
+    exit 1
+  fi
 fi
 
 echo "→ driver: launching standing pollers: ${LOOP_POLLERS[*]}"
