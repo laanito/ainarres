@@ -66,6 +66,14 @@ per-task invocation. The board drains to `done` and the driver exits 0 — provi
 driver + pollers + substrate wiring with zero stochastic harness behaviour. This is
 M14's done-test.
 
+## Stopping
+
+Killing the driver kills the loop. On Ctrl-C, `kill`, normal drain, or error, the
+driver tears down every poller **and its harness subtree** (grok/opencode and their
+git/gh children) via a TERM→KILL `kill_tree` in an EXIT/INT/TERM trap — so no runner
+is ever left doing real git/gh work after `make loop-run` exits. A `STOP` sentinel is
+dropped first so a poller resting between sweeps exits cleanly.
+
 ## Resilience
 
 A poller that dies mid-task is recovered with no driver involvement: the held task's
