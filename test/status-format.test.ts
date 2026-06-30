@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { formatStatus, formatEvents } from "../bin/ainarres.mjs";
+import { formatStatus, formatEvents, formatReport } from "../bin/ainarres.mjs";
 
 // Pure unit test: no substrate, no network, no DB, no token. We import the
 // formatter directly from the CLI module — which must NOT run the CLI on import
@@ -204,5 +204,45 @@ describe("formatEvents", () => {
     expect(out).toContain("c");
     expect(out).toContain("b");
     expect(out).not.toContain(" a "); // beyond limit
+  });
+});
+
+describe("formatReport", () => {
+  test("names shipped tasks with their PR, failures with reason, escalations, and per-family activity", () => {
+    const board = [
+      { task_id: "ship-1", is_terminal: true },
+      { task_id: "fail-1", blocked: true, blocked_reason: "max attempts exceeded" },
+      { task_id: "wip-1", is_terminal: false },
+    ];
+    const timeline = [
+      { task_id: "ship-1", type: "transition", family: "grok+grok-build", data: { artifacts: [{ type: "pr", url: "https://gh/pr/7" }] } },
+      { task_id: "ship-1", type: "claimed", family: "opencode+qwen", data: {} },
+      { task_id: "wip-1", type: "escalated", family: "opencode+qwen3.6", data: { from_tier: 1, to_tier: 2 } },
+      { task_id: "fail-1", type: "blocked", family: null, data: { reason: "max attempts exceeded" } },
+    ];
+    const out = formatReport({ board, timeline }, { lane: "dev" });
+    expect(out).toContain("end-of-run report — lane dev");
+    expect(out).toContain("shipped (1):");
+    expect(out).toContain("  - ship-1  https://gh/pr/7");
+    expect(out).toContain("failed/blocked (1):");
+    expect(out).toContain("  - fail-1: max attempts exceeded");
+    expect(out).toContain("escalations (1):");
+    expect(out).toContain("  - wip-1 → tier:2");
+    expect(out).toContain("activity by family:");
+    expect(out).toContain("  - grok+grok-build: 1 events");
+    expect(out).toContain("  - (human/system): 1 events");
+  });
+
+  test("empty board/timeline yields all-zero sections with placeholders", () => {
+    const out = formatReport({});
+    expect(out).toContain("shipped (0):");
+    expect(out).toContain("failed/blocked (0):");
+    expect(out).toContain("escalations (0):");
+    expect(out.match(/\(none\)/g)?.length).toBeGreaterThanOrEqual(3);
+  });
+
+  test("a shipped task with no PR ref says so", () => {
+    const out = formatReport({ board: [{ task_id: "s", is_terminal: true }], timeline: [] });
+    expect(out).toContain("  - s  (no PR ref)");
   });
 });

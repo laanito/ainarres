@@ -176,9 +176,13 @@ while true; do
   fi
 done
 
-# 3. Report.
+# 3. Report. The live board snapshot, then the M16 end-of-run report (what
+# shipped with PRs, what failed, escalations, per-family activity) — the account
+# the owner who walked away comes back to (ADR 0021 D5).
 echo "→ driver: final board:"
 ai status --lane "$LOOP_LANE" --token "$OVERSIGHT_TOKEN" || true
+echo
+ai report --lane "$LOOP_LANE" --token "$OVERSIGHT_TOKEN" || true
 read -r active blocked <<<"$(counts)"
 if [ "$active" -eq 0 ] && [ "$blocked" -eq 0 ]; then
   echo "✓ driver: board drained — every dev task reached a terminal stage."
