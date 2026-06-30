@@ -140,27 +140,160 @@ export function formatStatus({ board = [], feed = [], abandoned = [] }, { lane =
   const claimedCount = board.filter(r => r.claimed_by != null).length;
   lines.push(`  claimed: ${claimedCount}`);
 
-  // 3. Abandoned section.
+  // 2b. Active holders (M16): claimed-and-not-abandoned tasks, by durable family
+  // and age-in-stage — "who's working what, and for how long". Bare uuids if the
+  // enriched board columns aren't present (older view). Empty → no lines.
+  const active = board.filter(r => r.claimed_by != null && r.abandoned !== true);
+  if (active.length > 0) {
+    lines.push(`active (${active.length}):`);
+    for (const row of active) {
+      lines.push(`  - ${row.task_id} [${row.stage}] ${holderOf(row)}${ageOf(row)}`);
+    }
+  }
+
+  // 3. Abandoned section (stranded work) — now naming the holding family + age.
   lines.push(`abandoned (${abandoned.length}):`);
   if (abandoned.length === 0) {
     lines.push("  (none)");
   } else {
     for (const row of abandoned) {
-      lines.push(`  - ${row.task_id} [${row.stage}] claimed_by=${row.claimed_by}`);
+      lines.push(`  - ${row.task_id} [${row.stage}] claimed_by=${row.claimed_by}${famSuffix(row)}${ageOf(row)}`);
+    }
+  }
+
+  // 3b. Why-stuck (M16): recent escalations for tasks still on the board — a task
+  // that burned the cheap tier and now waits on a higher one (ADR 0019). Derived
+  // from the event stream (type 'escalated'); plain-language, deduped by task.
+  const liveTasks = new Set(board.filter(r => r.is_terminal !== true).map(r => r.task_id));
+  const escalations = [];
+  const seenEsc = new Set();
+  for (const ev of feed) {
+    if (ev.type !== "escalated" || !liveTasks.has(ev.task_id) || seenEsc.has(ev.task_id)) continue;
+    seenEsc.add(ev.task_id);
+    escalations.push(ev);
+  }
+  if (escalations.length > 0) {
+    lines.push(`escalated (${escalations.length}):`);
+    for (const ev of escalations) {
+      const to = ev.data?.to_tier;
+      lines.push(`  - ${ev.task_id} → tier:${to ?? "?"} (waiting for a higher tier)`);
     }
   }
 
   // 4. Recent events — feed is already newest-first; take the first feedLimit.
+  // Attribute by family when the row carries it (timeline), else the actor uuid.
   lines.push(`recent events (showing up to ${feedLimit}):`);
   if (feed.length === 0) {
     lines.push("  (no events)");
   } else {
     for (const ev of feed.slice(0, feedLimit)) {
-      lines.push(`  - ${ev.created_at} ${ev.type} ${ev.task_id} by ${ev.actor}`);
+      lines.push(`  - ${ev.created_at} ${ev.type} ${ev.task_id} by ${ev.family ?? ev.actor ?? "—"}`);
     }
   }
 
   return lines.join("\n");
+}
+
+// Small pure helpers for the M16 board enrichment (no I/O; tolerate older rows).
+function holderOf(row) {
+  return row.claimed_by_family ?? row.claimed_by ?? "—";
+}
+function famSuffix(row) {
+  return row.claimed_by_family ? ` family=${row.claimed_by_family}` : "";
+}
+function ageOf(row) {
+  return row.age_in_stage != null ? ` age=${row.age_in_stage}` : "";
+}
+
+// Pure, deterministic formatter for the M16 event timeline (api.timeline rows:
+// already newest-first, joined to the acting family). One line per event:
+// `<created_at>  <type>  <task_id>  <family|actor|—>  ⟨reason⟩`. No I/O, no clock.
+export function formatEvents(rows = [], { limit = 50 } = {}) {
+  const lines = [`timeline (showing up to ${limit}):`];
+  if (rows.length === 0) {
+    lines.push("  (no events)");
+    return lines.join("\n");
+  }
+  for (const ev of rows.slice(0, limit)) {
+    const who = ev.family ?? ev.actor ?? "—";
+    lines.push(`  ${ev.created_at}  ${ev.type}  ${ev.task_id}  ${who}${reasonOf(ev)}`);
+  }
+  return lines.join("\n");
+}
+
+// Pure, deterministic END-OF-RUN report (M16, ADR 0021 D5): a rendering of the
+// board + event timeline a drained loop comes back to. Names what shipped (with
+// PRs), what failed and why, escalations, and per-family activity. No I/O, no
+// clock — the driver fetches the rows and passes them here.
+export function formatReport({ board = [], timeline = [] } = {}, { lane = null } = {}) {
+  const lines = [lane ? `end-of-run report — lane ${lane}` : "end-of-run report — all lanes"];
+
+  // Newest-first PR reference for a task, dug out of its transition artifacts.
+  const prFor = (taskId) => {
+    for (const ev of timeline) {
+      if (ev.task_id !== taskId) continue;
+      const arts = ev.data?.artifacts;
+      if (Array.isArray(arts)) {
+        const pr = arts.find((a) => a && a.type === "pr" && a.url);
+        if (pr) return pr.url;
+      }
+    }
+    return null;
+  };
+
+  // What shipped: tasks at a terminal stage.
+  const shipped = board.filter((r) => r.is_terminal === true);
+  lines.push(`shipped (${shipped.length}):`);
+  if (shipped.length === 0) lines.push("  (none)");
+  for (const row of shipped) lines.push(`  - ${row.task_id}  ${prFor(row.task_id) ?? "(no PR ref)"}`);
+
+  // What failed: blocked tasks, with the reason.
+  const failed = board.filter((r) => r.blocked === true);
+  lines.push(`failed/blocked (${failed.length}):`);
+  if (failed.length === 0) lines.push("  (none)");
+  for (const row of failed) lines.push(`  - ${row.task_id}: ${row.blocked_reason ?? "?"}`);
+
+  // Escalations: deduped by task, naming the tier it climbed to.
+  const escSeen = new Set();
+  const escalations = [];
+  for (const ev of timeline) {
+    if (ev.type !== "escalated" || escSeen.has(ev.task_id)) continue;
+    escSeen.add(ev.task_id);
+    escalations.push(ev);
+  }
+  lines.push(`escalations (${escalations.length}):`);
+  if (escalations.length === 0) lines.push("  (none)");
+  for (const ev of escalations) lines.push(`  - ${ev.task_id} → tier:${ev.data?.to_tier ?? "?"}`);
+
+  // Activity by family: who did how much (which tier carried the work).
+  const byFamily = new Map();
+  for (const ev of timeline) {
+    const fam = ev.family ?? "(human/system)";
+    byFamily.set(fam, (byFamily.get(fam) ?? 0) + 1);
+  }
+  lines.push("activity by family:");
+  if (byFamily.size === 0) lines.push("  (none)");
+  for (const fam of [...byFamily.keys()].sort()) lines.push(`  - ${fam}: ${byFamily.get(fam)} events`);
+
+  return lines.join("\n");
+}
+
+// The human-readable gist of an event's structured data — the verdict/reason the
+// v3 pollution post-mortem had to dig out of raw jsonb. Best-effort, never throws.
+function reasonOf(ev) {
+  const d = ev.data;
+  if (!d || typeof d !== "object") return "";
+  if (ev.type === "transition") {
+    const verb = d.kind === "reject" ? "reject" : "advance";
+    const why = d.reason ? `: ${d.reason}` : "";
+    return `  (${verb} ${d.from}→${d.to}${why})`;
+  }
+  if (ev.type === "escalated") return `  (tier ${d.from_tier}→${d.to_tier}, attempt ${d.attempts})`;
+  if (ev.type === "released") return `  (released${d.reason ? `: ${d.reason}` : ""}, attempt ${d.attempts})`;
+  if (ev.type === "blocked") return `  (blocked: ${d.reason ?? "?"})`;
+  if (d.reason) return `  (${d.reason})`;
+  if (d.note) return `  (${d.note})`;
+  return "";
 }
 
 // Decode a JWT-ish token's payload without verifying the signature. The token is
@@ -305,24 +438,76 @@ const COMMANDS = {
   // a non-oversight token gets a PostgREST 401/403 → JSON error envelope + exit 1.
   async status(rest, values, token) {
     const lane = values.lane ?? null;
-    const laneFilter = (q) => { if (lane) q.set("lane", `eq.${lane}`); return q; };
     const feedLimit = values.limit ? Number(values.limit) : 10;
+
+    // One snapshot: board + timeline (family-joined, M16) + abandoned → pure format.
+    const snapshot = async () => {
+      const laneFilter = (q) => { if (lane) q.set("lane", `eq.${lane}`); return q; };
+      const boardQ = laneFilter(new URLSearchParams());
+      // Pull more timeline rows than we render so why-stuck (escalations) can see
+      // past the recent-events window; formatStatus trims display to feedLimit.
+      const tlQ = laneFilter(new URLSearchParams()); tlQ.set("limit", String(Math.max(feedLimit, 100)));
+      const abandQ = laneFilter(new URLSearchParams());
+      const [b, f, a] = await Promise.all([
+        restGet(`board?${boardQ}`, token),
+        restGet(`timeline?${tlQ}`, token),
+        restGet(`abandoned?${abandQ}`, token),
+      ]);
+      for (const r of [b, f, a]) {
+        if (!r.httpOk) { emit(r.body ?? { ok: false, code: "http_error", status: r.status }, false); return null; }
+      }
+      return formatStatus({ board: b.body, feed: f.body, abandoned: a.body }, { lane, feedLimit });
+    };
+
+    // --watch: poll-refresh (ADR 0021 D1 — no LISTEN/NOTIFY, no new infra). Reprint
+    // the snapshot every --interval seconds (default 2) until interrupted.
+    if (values.watch) {
+      const interval = values.interval ? Number(values.interval) : 2;
+      for (;;) {
+        const summary = await snapshot();
+        if (summary == null) return; // an http error already emitted
+        process.stdout.write(`\x1b[2J\x1b[H${summary}\n`); // clear screen, home cursor
+        await new Promise((res) => setTimeout(res, interval * 1000));
+      }
+    }
+
+    const summary = await snapshot();
+    if (summary != null) process.stdout.write(`${summary}\n`);
+  },
+
+  // The M16 event timeline (api.timeline): every event joined to the acting agent's
+  // FAMILY, newest-first, filterable by task/family/type. Human text via formatEvents
+  // (pass --json for raw rows). The surface the v3 pollution post-mortem needed SQL for.
+  async events(rest, values, token) {
+    const limit = values.limit ? Number(values.limit) : 50;
+    const q = new URLSearchParams();
+    if (values.lane) q.set("lane", `eq.${values.lane}`);
+    if (values.task) q.set("task_id", `eq.${values.task}`);
+    if (values.family) q.set("family", `eq.${values.family}`);
+    if (values.type) q.set("type", `eq.${values.type}`);
+    q.set("limit", String(limit));
+    const r = await restGet(`timeline?${q}`, token);
+    if (!r.httpOk) { emit(r.body ?? { ok: false, code: "http_error", status: r.status }, false); return; }
+    if (values.json) { emit(r.body, true); return; }
+    process.stdout.write(`${formatEvents(r.body, { limit })}\n`);
+  },
+
+  // End-of-run report (M16, ADR 0021 D5): what shipped (PRs), what failed, the
+  // escalations, and per-family activity. Read-only over board + timeline; the
+  // driver calls this on drain. Pure formatReport() does the rendering.
+  async report(rest, values, token) {
+    const lane = values.lane ?? null;
+    const laneFilter = (q) => { if (lane) q.set("lane", `eq.${lane}`); return q; };
     const boardQ = laneFilter(new URLSearchParams());
-    const feedQ = laneFilter(new URLSearchParams()); feedQ.set("limit", String(feedLimit));
-    const abandQ = laneFilter(new URLSearchParams());
-    const [b, f, a] = await Promise.all([
+    const tlQ = laneFilter(new URLSearchParams()); tlQ.set("limit", values.limit ?? "1000");
+    const [b, t] = await Promise.all([
       restGet(`board?${boardQ}`, token),
-      restGet(`feed?${feedQ}`, token),
-      restGet(`abandoned?${abandQ}`, token),
+      restGet(`timeline?${tlQ}`, token),
     ]);
-    for (const r of [b, f, a]) {
+    for (const r of [b, t]) {
       if (!r.httpOk) { emit(r.body ?? { ok: false, code: "http_error", status: r.status }, false); return; }
     }
-    const summary = formatStatus(
-      { board: b.body, feed: f.body, abandoned: a.body },
-      { lane, feedLimit },
-    );
-    process.stdout.write(`${summary}\n`);
+    process.stdout.write(`${formatReport({ board: b.body, timeline: t.body }, { lane })}\n`);
   },
 };
 
@@ -342,7 +527,9 @@ const OPTS = {
   board: { lane: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
   feed: { lane: { type: "string" }, task: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
   abandoned: { lane: { type: "string" }, token: { type: "string" } },
-  status: { lane: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
+  status: { lane: { type: "string" }, limit: { type: "string" }, watch: { type: "boolean" }, interval: { type: "string" }, token: { type: "string" } },
+  events: { lane: { type: "string" }, task: { type: "string" }, family: { type: "string" }, type: { type: "string" }, limit: { type: "string" }, json: { type: "boolean" }, token: { type: "string" } },
+  report: { lane: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
 };
 
 const USAGE = `ainarres — agent CLI (verbs over PostgREST)
@@ -361,7 +548,9 @@ const USAGE = `ainarres — agent CLI (verbs over PostgREST)
   unblock   <task-id> [--note T]
   heartbeat <task-id> [--watch --interval 60 --max 3600]
   board | feed | abandoned [--lane L] [--task UUID] [--limit N]
-  status  [--lane L] [--limit N]   one-glance oversight summary (board + abandoned + recent feed)
+  status  [--lane L] [--limit N] [--watch [--interval 2]]   one-glance oversight summary (board + active + abandoned + why-stuck)
+  events  [--lane L] [--task UUID] [--family F] [--type X] [--limit N] [--json]   event timeline joined to the acting family
+  report  [--lane L] [--limit N]   end-of-run report: shipped (PRs) · failed · escalations · activity by family
 
 env: AINARRES_BASE_URL, JWT_SECRET (token), AINARRES_TOKEN (bearer; --token overrides)`;
 
