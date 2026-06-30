@@ -172,6 +172,13 @@ export function decodeClaims(token) {
   return JSON.parse(json);
 }
 
+// Pure, deterministic seconds until expiry given a token and a reference time
+// (in epoch seconds). No I/O, no clock — same inputs → same output. May be negative.
+export function secondsToExpiry(token, nowSeconds) {
+  const claims = decodeClaims(token);
+  return claims.exp - nowSeconds;
+}
+
 const COMMANDS = {
   // Mint an HS256 token locally (operator holds the secret; signing lives outside
   // the DB per M2). Features are explicit; this never reads the DB.
@@ -205,6 +212,13 @@ const COMMANDS = {
   whoami(rest, values, token) {
     const c = decodeClaims(token);
     emit({ sub: c.sub, family: c.family, role: c.role, features: c.features });
+  },
+
+  ttl(rest, values, token) {
+    const now = Math.floor(Date.now() / 1000);
+    const remaining = secondsToExpiry(token, now);
+    const exp = decodeClaims(token).exp;
+    emit({ exp, seconds_remaining: remaining, expired: remaining <= 0 });
   },
 
   create(rest, values, token) {
@@ -317,6 +331,7 @@ const OPTS = {
   create: { lane: { type: "string" }, instructions: { type: "string" }, entry: { type: "string" }, validate: { type: "string" }, payload: { type: "string" }, priority: { type: "string" }, subject: { type: "string" }, "depends-on": { type: "string" }, token: { type: "string" } },
   claim: { lane: { type: "string" }, token: { type: "string" } },
   whoami: { token: { type: "string" } },
+  ttl: { token: { type: "string" } },
   progress: { note: { type: "string" }, artifact: { type: "string", multiple: true }, pr: { type: "string" }, branch: { type: "string" }, commit: { type: "string" }, token: { type: "string" } },
   advance: { to: { type: "string" }, note: { type: "string" }, artifact: { type: "string", multiple: true }, pr: { type: "string" }, branch: { type: "string" }, commit: { type: "string" }, token: { type: "string" } },
   reject: { to: { type: "string" }, reason: { type: "string" }, artifact: { type: "string", multiple: true }, pr: { type: "string" }, branch: { type: "string" }, commit: { type: "string" }, token: { type: "string" } },
@@ -335,6 +350,7 @@ const USAGE = `ainarres — agent CLI (verbs over PostgREST)
   token   --family F --role R --features a,b [--sub S] [--ttl 900]
   version   print CLI version (from package.json; no token)
   whoami    print identity in bearer token as {sub,family,role,features} (local decode; no network)
+  ttl       print token TTL info as {exp, seconds_remaining, expired} (local decode; no network)
   create  --lane L [--instructions T --entry F --validate CMD | --payload JSON] [--priority N] [--subject UUID] [--depends-on ID,ID]
   claim   [--lane L]
   progress  <task-id> [--note T] [--artifact PATH ...] [--pr URL --branch NAME --commit SHA]
