@@ -1,0 +1,37 @@
+Add an `ainarres ttl` subcommand that reports how long the bearer token has left
+before it expires.
+
+A minted token carries an `exp` claim: a Unix timestamp in SECONDS (see the `token`
+command — `mintJwt` sets `iat`/`exp`). The repo already exports a PURE `decodeClaims`
+function (added in the `whoami` slice) that base64url-decodes the JWT payload locally —
+no network, no DB, no signature verification. Build `ttl` on top of it the same way.
+
+Implement in bin/ainarres.mjs (only this file + the new test):
+
+1. Export a PURE function `secondsToExpiry(token, nowSeconds)`:
+   - Call the existing `decodeClaims(token)` to get the claims object.
+   - Return `claims.exp - nowSeconds` as an integer (it may be negative for an already
+     expired token; `nowSeconds` is the current time in seconds, passed in so the
+     function is deterministic and unit-testable without mocking the clock).
+   - Export it the same way `decodeClaims` / `formatStatus` are exported.
+
+2. Add a `ttl` command (in the COMMANDS map, OPTS, and the USAGE text, matching the
+   style of `whoami` — it reads the bearer token from AINARRES_TOKEN env or --token,
+   needs no network). It computes `now = Math.floor(Date.now() / 1000)`, calls
+   `secondsToExpiry(token, now)`, and prints ONE JSON line:
+   `{ exp, seconds_remaining, expired }`
+   where `exp` is the token's `exp` claim, `seconds_remaining` is the function's result,
+   and `expired` is `seconds_remaining <= 0`.
+
+3. Add a NEW test file test/ttl.test.ts that imports `secondsToExpiry` from
+   bin/ainarres.mjs and asserts, for a hand-built token with a known `exp`, that:
+   - a token expiring in the future returns the exact positive remaining seconds for a
+     fixed `nowSeconds` (e.g. exp = 1000, now = 600 → 400), and
+   - an already-expired token returns a negative number (e.g. exp = 1000, now = 1500 → -500).
+   Construct the token as `header.payload.sig` where payload is
+   `Buffer.from(JSON.stringify({ sub: "s1", exp: 1000 })).toString("base64url")`.
+   This test must FAIL on current main (`secondsToExpiry` does not exist yet) and pass
+   after the change.
+
+Per-task validate (substrate-free, discriminating — fails on main, passes after the
+change): `npx vitest run test/ttl.test.ts`. Do not run the full suite.
