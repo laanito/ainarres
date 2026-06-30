@@ -116,11 +116,19 @@ controls). Per-worker isolation (M17 git worktree + per-sweep opencode state) is
 single-laptop stand-in for "each on its own machine."
 
 ```sh
-make loop-reset && make loop-run BRIEF=loop/examples/parallel-gate-brief.txt
+make loop-reset && make loop-run BRIEF=loop/examples/parallel-gate-brief-2.txt
 ```
 
-`loop/examples/parallel-gate-brief.txt` decomposes into **three independent** tasks
-(new file + test each, no shared edits) so the pool fans out. **Pass =** during the run,
+**Gate briefs are SINGLE-USE.** Each run ships its tasks to `main`, so re-running the
+*same* brief is not a concurrency test — the work already exists, so a smart designer
+creates nothing (exit 1) or the implementers hit empty diffs and the integrator
+refuses-empty / rejects (churn), never genuine parallel work. Use a **fresh** brief each
+time: `parallel-gate-brief.txt` shipped `humanize-seconds`/`pluralize`/`short-id`;
+`parallel-gate-brief-2.txt` adds three more (`clamp`/`ordinal`/`percent`); write the next
+when those are on `main` too.
+
+The brief decomposes into **three independent** tasks (new file + test each, no shared
+edits) so the pool fans out. **Pass =** during the run,
 `ainarres status --watch --lane dev` (oversight token) shows **≥2 implementers holding
 distinct tasks at the same time** (the `active` block) and the end-of-run report's
 *activity by family* shows more than one implementer did real work; **`main` stays green**

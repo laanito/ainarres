@@ -1,0 +1,42 @@
+Add three more independent, pure display helpers under bin/lib/ — self-contained
+utilities the CLI's M16 formatters can adopt later. They share NO code and NO files, so
+they are built INDEPENDENTLY and IN PARALLEL: this is an M18 gate brief, so the
+decomposition must be a fan-out, not a chain.
+
+NOTE — gate briefs are SINGLE-USE: each run ships its tasks to `main`, so a re-run needs
+a fresh brief whose work doesn't exist yet. The first gate brief already shipped
+humanize-seconds.mjs / pluralize.mjs / short-id.mjs; this one adds three NEW helpers
+that are not yet on `main`.
+
+DESIGNER — decompose this into THREE INDEPENDENT tasks with NO `depends_on` between
+them (each is a new file + its own new test; none imports another). Do not add a
+wiring/integration task — these are standalone utilities. Independence is the point:
+the pool can only fan out if the tasks don't block each other.
+
+Task A — bin/lib/clamp.mjs
+  Export a PURE function `clamp(n, lo, hi)` returning n bounded to [lo, hi]:
+  clamp(5,0,10) → 5, clamp(-3,0,10) → 0, clamp(99,0,10) → 10, clamp(7,7,7) → 7.
+  New test test/clamp.test.ts asserts those cases (and must FAIL on main — the file
+  doesn't exist yet).
+  Per-task validate: `npx vitest run test/clamp.test.ts`
+
+Task B — bin/lib/ordinal.mjs
+  Export a PURE function `ordinal(n)` returning the English ordinal string for a
+  non-negative integer: 1 → "1st", 2 → "2nd", 3 → "3rd", 4 → "4th", 11 → "11th",
+  12 → "12th", 13 → "13th", 21 → "21st", 22 → "22nd", 113 → "113th". (The teens
+  11–13 are always "th"; otherwise key off the last digit.) New test
+  test/ordinal.test.ts asserts those cases (and fails on main).
+  Per-task validate: `npx vitest run test/ordinal.test.ts`
+
+Task C — bin/lib/percent.mjs
+  Export a PURE function `percent(part, whole)` returning an integer-rounded percent
+  string: percent(1,4) → "25%", percent(1,3) → "33%", percent(0,5) → "0%",
+  percent(5,5) → "100%"; a `whole` of 0 returns "0%" (no divide-by-zero). New test
+  test/percent.test.ts asserts those cases (and fails on main).
+  Per-task validate: `npx vitest run test/percent.test.ts`
+
+Each task is fully self-contained: one new file under bin/lib/, one new test file, no
+edits to any shared file (so no rebase conflicts — the merge queue rebases + re-validates
+each on the latest main and merges cleanly, one at a time). Keep each function pure (no
+I/O, no clock, no DB), exported as a named ESM export, matching the existing pure-helper
+style in bin/ainarres.mjs and bin/lib/. Do NOT run the full suite as a per-task validate.
