@@ -105,27 +105,30 @@ LOOP_MOCK_CONFLICT=1 make loop-selftest
 Same, plus one task the integrator **rejects once** (simulating a rebase conflict, D3)
 before it merges — proving the merge-queue conflict policy still drains green.
 
-## Measure the gate (M18 — does the swarm beat the pipeline?)
+## Judge the gate (M18 — does the substrate coordinate a real swarm?)
 
-The M18 success gate is **quantitative**: a real multi-task feature must drain
-**faster** through the concurrent pool than through the serial pipeline, coherently.
-Run the same brief twice and compare wall-clock:
+The M18 gate is **concurrency correctness, not a stopwatch** (ADR 0021 § Amendment
+2026-06-30). The north star is the substrate coordinating **independent workers that
+could be on different machines, networks, or universes** — so wall-clock on one laptop
+is *not* the measure (a single host caps real parallelism via shared CPU, a free-API
+backend that serializes calls, and per-tool state — none of which the substrate
+controls). Per-worker isolation (M17 git worktree + per-sweep opencode state) is the
+single-laptop stand-in for "each on its own machine."
 
 ```sh
-# Baseline — serial pipeline (pool of 1):
-make loop-reset && time LOOP_POOL_SIZE=1 make loop-run BRIEF=loop/examples/parallel-gate-brief.txt
-
-# Swarm — concurrent pool:
-make loop-reset && time LOOP_POOL_SIZE=3 make loop-run BRIEF=loop/examples/parallel-gate-brief.txt
+make loop-reset && make loop-run BRIEF=loop/examples/parallel-gate-brief.txt
 ```
 
 `loop/examples/parallel-gate-brief.txt` decomposes into **three independent** tasks
-(new file + test each, no shared edits) so the pool can fan out. **Pass = the pool run's
-wall-clock beats the serial run**, `main` green throughout, the loop terminates, and
-the concurrency is visible: during the pool run, `ainarres status --watch --lane dev`
-(oversight token) shows **multiple implementers active at once**, and the end-of-run
-report's *activity by family* corroborates. This run is **owner-invoked** (the
-integrator is owner-launched, above) — the M18 gate / the milestone-scale self-build.
+(new file + test each, no shared edits) so the pool fans out. **Pass =** during the run,
+`ainarres status --watch --lane dev` (oversight token) shows **≥2 implementers holding
+distinct tasks at the same time** (the `active` block) and the end-of-run report's
+*activity by family* shows more than one implementer did real work; **`main` stays green**
+(every merge rebased + re-validated, no double-claim, no corruption); and the loop
+terminates. That demonstrates location-independent coordination — the same run would hold
+with the workers on N machines. Wall-clock is worth a glance (`time …`) but is **not**
+the gate. This run is **owner-invoked** (the integrator is owner-launched, above) — the
+M18 gate / the milestone-scale self-build.
 
 ## Stopping
 
