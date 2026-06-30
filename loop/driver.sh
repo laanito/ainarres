@@ -47,6 +47,7 @@ export AINARRES_BASE_URL JWT_SECRET
 source "$HERE/roles.sh"
 
 LOOP_MAX_ROUNDS="${LOOP_MAX_ROUNDS:-20}"   # safety bound (full no-progress detection ends it sooner)
+LOOP_POOL_SIZE="${LOOP_POOL_SIZE:-3}"      # M18: concurrent cheap implementers per round (ADR 0021 D1)
 AINARRES=(node "$REPO/bin/ainarres.mjs")
 ai() { "${AINARRES[@]}" "$@"; }
 mkdir -p "$RUN_DIR"
@@ -69,6 +70,7 @@ board_sig() {
 
 # ── Teardown: kill the active sweep's harness subtree on exit/interrupt ────────
 CURRENT_SWEEP_PID=""
+POOL_PIDS=()          # M18: pids of the concurrent implementer pool currently in flight
 _stopped=0
 
 # Recursively kill a process and all its descendants (a sweep's harness spawns
@@ -84,14 +86,20 @@ kill_tree() {
 stop_active() {
   [ "$_stopped" = 1 ] && return 0
   _stopped=1
-  if [ -n "$CURRENT_SWEEP_PID" ]; then
-    kill_tree "$CURRENT_SWEEP_PID" TERM
-    sleep 1
-    kill_tree "$CURRENT_SWEEP_PID" KILL
-  fi
-  # Garbage-collect per-sweep worktrees (M17). The loop is serialized, so on exit no
-  # sweep is live → gc with no active ids clears them all; a crashed run leaves none
-  # behind. Best-effort: never let cleanup fail the run.
+  # Kill the single in-flight sweep (designer/fallback/frontier) AND every member of
+  # the concurrent implementer pool (M18) — none may be left doing git/gh work.
+  local pid
+  for pid in ${CURRENT_SWEEP_PID:-} ${POOL_PIDS[@]:-}; do
+    [ -n "$pid" ] || continue
+    kill_tree "$pid" TERM
+  done
+  sleep 1
+  for pid in ${CURRENT_SWEEP_PID:-} ${POOL_PIDS[@]:-}; do
+    [ -n "$pid" ] || continue
+    kill_tree "$pid" KILL
+  done
+  # Garbage-collect per-sweep worktrees (M17). On exit no sweep is live → gc with no
+  # active ids clears them all; a crashed run leaves none behind. Best-effort.
   bash "$HERE/worktree.sh" gc >/dev/null 2>&1 || true
 }
 trap 'stop_active' EXIT
@@ -132,6 +140,29 @@ run_sweep() {
   return "$rc"
 }
 
+# ── M18: a concurrent pool of implementer sweeps ──────────────────────────────
+# Run LOOP_POOL_SIZE implementer sweeps of one tier AT ONCE, then reap them. The
+# substrate's SKIP LOCKED claim makes the concurrent pulls race-free (each member
+# grabs a distinct task); one-active-task-per-instance means N members hold ≤N tasks.
+# Each member gets its own sub → its own M17 worktree (LOOP_SWEEP_ID) and its own
+# stranded-release. This is where the swarm's throughput comes from (ADR 0021 D1).
+# Parallel indexed arrays (bash 3.2 — no associative arrays).
+run_pool() {
+  local tier="$1" n="$2" i sub tok pids=() subs=() toks=()
+  for ((i = 0; i < n; i++)); do
+    sub="$(uuidgen | tr 'A-Z' 'a-z')"
+    tok="$(mint_token "$tier" "$sub")"
+    AINARRES_TOKEN="$tok" LOOP_SWEEP_ID="$sub" harness_sweep "$tier" >>"$RUN_DIR/$tier-$sub.log" 2>&1 &
+    pids+=("$!"); subs+=("$sub"); toks+=("$tok")
+  done
+  POOL_PIDS=("${pids[@]}")                 # expose to stop_active for the kill trap
+  for i in "${!pids[@]}"; do
+    wait "${pids[$i]}" || true             # a member failing is fine; the board is the truth
+    release_stranded "${subs[$i]}" "${toks[$i]}"
+  done
+  POOL_PIDS=()
+}
+
 echo "→ driver: loop substrate = ${AINARRES_BASE_URL} (mode=$LOOP_MODE)"
 if ! ai board --lane "$LOOP_LANE" --token "$OVERSIGHT_TOKEN" >/dev/null 2>&1; then
   echo "driver: cannot reach the loop substrate at $AINARRES_BASE_URL." >&2
@@ -160,13 +191,21 @@ else
   fi
 fi
 
-# 2. Tiered rounds: cheapest tier first, until a full round makes no progress.
-echo "→ driver: worker tiers (low→high): ${LOOP_TIERS[*]}"
+# 2. Concurrent rounds (M18): each round fans the primary cheap implementer out into
+#    a pool of LOOP_POOL_SIZE simultaneous sweeps (the throughput), then runs the
+#    serial tiers once each (fallback ceiling, then frontier review/integrate — the
+#    single integrator IS the merge queue). Repeat until a full round moves nothing
+#    OR the board drains. Termination is unchanged in spirit: board empty AND no
+#    sweep in flight (run_pool/run_sweep both reap before returning, so when the round
+#    body finishes nothing is running — D4).
+echo "→ driver: pool=${LOOP_POOL_SIZE}× '${LOOP_POOL_TIER}' per round; then serial: ${LOOP_SERIAL_TIERS[*]}"
 round=0
 while true; do
   round=$((round + 1))
   before="$(board_sig)"
-  for tier in "${LOOP_TIERS[@]}"; do
+  echo "→ round $round: ${LOOP_POOL_SIZE} concurrent '${LOOP_POOL_TIER}' implementers…"
+  run_pool "$LOOP_POOL_TIER" "$LOOP_POOL_SIZE"
+  for tier in "${LOOP_SERIAL_TIERS[@]}"; do
     echo "→ round $round: tier '$tier' sweeping…"
     run_sweep "$tier" || echo "  (tier '$tier' sweep exited non-zero — continuing)"
   done

@@ -42,12 +42,24 @@ case "$POLLER" in
     fi ;;
 esac
 
-# One-shot decomposition: the driver calls `mock-harness.sh designer <brief>` once
-# to hand the brief to the designer. The mock turns the brief into ONE trivial,
-# self-contained task (validate `true`) so the plumbing test stays deterministic.
+# One-shot decomposition: the driver calls `mock-harness.sh designer <brief>` once to
+# hand the brief to the designer. The mock decomposes it into LOOP_MOCK_TASKS (default
+# 3) INDEPENDENT, self-contained tasks (validate `true`) — independent so the M18
+# concurrent pool can claim and implement them simultaneously (SKIP LOCKED), which is
+# what the multi-task drain test exercises. Each is trivial so the plumbing test stays
+# deterministic.
 if [ "$POLLER" = "designer" ] && [ -n "$BRIEF_FILE" ]; then
   goal="$(head -n1 "$BRIEF_FILE" 2>/dev/null || echo "mock feature")"
-  ai create --lane dev --payload "$(node -e 'process.stdout.write(JSON.stringify({goal:process.argv[1],instructions:"mock: no-op change",files:[],validate:"true",acceptance:"board drains to done"}))' "$goal")" >/dev/null
+  n="${LOOP_MOCK_TASKS:-3}"
+  for i in $(seq 1 "$n"); do
+    ai create --lane dev --payload "$(node -e 'process.stdout.write(JSON.stringify({goal:process.argv[1]+" #"+process.argv[2],instructions:"mock: no-op change",files:[],validate:"true",acceptance:"board drains to done"}))' "$goal" "$i")" >/dev/null
+  done
+  # M18 merge-queue conflict test: with LOOP_MOCK_CONFLICT=1 add one task that the
+  # integrator will reject ONCE (simulating a rebase conflict, D3) before it merges —
+  # proving conflict→reject→re-implement→merge still drains green.
+  if [ "${LOOP_MOCK_CONFLICT:-0}" = "1" ]; then
+    ai create --lane dev --payload "$(node -e 'process.stdout.write(JSON.stringify({goal:"mock CONFLICT task",instructions:"mock: rebase-conflicts once",files:[],validate:"true",mock_conflict:true,acceptance:"merges after one reject"}))')" >/dev/null
+  fi
 fi
 
 # The claim→act→repeat sweep, identical in shape to every role skill's loop.
@@ -57,6 +69,19 @@ while true; do
   [ "$code" = "ok" ] || break        # empty / already_holding / not_eligible → done sweeping
   id="$(printf '%s' "$out" | jget task.id)"
   stage="$(printf '%s' "$out" | jget task.stage_key)"
+  conflict="$(printf '%s' "$out" | jget task.payload.mock_conflict)"
+
+  # M18 merge-queue conflict policy (D3): a conflict-marked task is rejected back to
+  # implementing on its FIRST integrate pass, then merges on the retry. The sentinel
+  # makes it deterministic and one-shot (the agent token can't read event history).
+  if [ "$POLLER" = "frontier" ] && [ "$stage" = "integrating" ] && [ "$conflict" = "true" ]; then
+    sentinel="${RUN_DIR:-$REPO/loop/run}/mock-conflict-$id.handled"
+    if [ ! -f "$sentinel" ]; then
+      : > "$sentinel"
+      ai reject "$id" --to implementing --reason "mock: rebase conflict against main (D3)" >/dev/null
+      continue
+    fi
+  fi
 
   case "$POLLER:$stage" in
     designer:proposed)      ai advance "$id" --to designing   --note "mock: design start" >/dev/null ;;

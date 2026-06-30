@@ -7,13 +7,15 @@ driver. No component here coordinates — coordination is the substrate's job
 
 ```
 loop/
-  driver.sh                the dumb driver: brief → designer → sweep tiers in rounds → stop when drained
-  roles.sh                 config: the ordered worker tiers + each tier's harness, token features
+  driver.sh                the dumb driver: brief → designer → each round runs a CONCURRENT
+                           pool of cheap implementers + the serial tiers → stop when drained
+  worktree.sh              per-sweep git worktree isolation (M17): enter/teardown/gc
+  roles.sh                 config: the pool tier + serial tiers + each tier's harness, token features
   grok-frontier.sh         real frontier harness wrapper (grok; designer/reviewer/integrator/escalated-impl)
-  opencode-implementer.sh  real cheap-implementer harness wrapper (opencode; model per tier)
+  opencode-implementer.sh  real cheap-implementer harness wrapper (opencode; isolates in a worktree)
   mock-harness.sh          deterministic stand-in (LOOP_MODE=mock) for the plumbing test
-  examples/                feature briefs
-  run/                     per-tier sweep logs (gitignored)
+  examples/                feature briefs (incl. parallel-gate-brief.txt — the M18 gate)
+  run/                     per-sweep logs + worktree sentinels (gitignored)
 ```
 
 ## Worker tiers (capability order, cheapest first)
@@ -31,10 +33,21 @@ claims `implementing` work first; the **fallback** (nemotron-3-ultra; swap via
 it failed — both before the task escalates. The frontier only picks up what's left:
 review/integrate, and M12-escalated tasks the cheap tiers couldn't finish (`tier:2`).
 The dev `implementing` stage uses `escalate_after = 2`, so both cheap tiers get an
-attempt before grok. **Tiering, not concurrency**, keeps the cheap tiers doing the
-heavy lifting with the frontier as the escalation ceiling. (The local `qwen3.6` was
-dropped: it implemented correctly but didn't reliably *complete* the loop —
-commit/advance/release — stranding tasks. Swap models per tier via the `*_MODEL` vars.)
+attempt before grok. (The local `qwen3.6` was dropped: it implemented correctly but
+didn't reliably *complete* the loop — commit/advance/release — stranding tasks. Swap
+models per tier via the `*_MODEL` vars.)
+
+**M18 — the primary cheap implementer is fanned out into a concurrent pool.** Each
+round launches `LOOP_POOL_SIZE` (default 3) simultaneous `cheap-implementer` sweeps
+(`roles.sh::LOOP_POOL_TIER`), each in its own M17 git worktree (`LOOP_SWEEP_ID`), so
+they implement independent DAG tasks at once without colliding on a checkout — this is
+the swarm's throughput. The remaining tiers (`LOOP_SERIAL_TIERS` = fallback, frontier)
+still run once each, serially, after the pool. **Integration stays single**: the lone
+frontier integrator drains `integrating` FIFO, rebasing on the latest default branch +
+re-validating before each merge — it *is* the merge queue (parallel-loop.md D2), which
+is what keeps `main` coherent while implementing runs wide. A rebase conflict or a
+post-rebase validate failure rejects the task back to `implementing` (D3), never a
+dirty merge.
 
 Token features per tier live in `roles.sh::role_features` and are authoritative for
 the run (the substrate trusts the signed token's features minus denials — ADR 0007).
@@ -44,8 +57,10 @@ the run (the substrate trusts the signed token's features minus denials — ADR 
 The driver loops **rounds** until a full round makes **no progress** — either the
 board is **drained** (every dev task terminal → success, exit 0) or **nobody can move
 it** (stuck → exit 1, reported). It does not poll forever: when no tier has work left,
-it stops. (A richer scheduler — token budgets, multiple workers per tier, always-on
-daemonized tiers — is a later v3+ slice. This is the minimal tiered, terminating loop.)
+it stops. Termination is unchanged by the M18 pool: `run_pool`/`run_sweep` both reap
+their sweeps before a round returns, so when the round body finishes nothing is running
+— "board empty AND pool idle" (parallel-loop.md D4). (Token budgets and always-on
+daemonized tiers remain later slices.)
 
 ## Run it for real (owner-invoked)
 
@@ -71,11 +86,42 @@ make loop-selftest
 ```
 
 Brings up a fresh loop substrate and runs the driver with `LOOP_MODE=mock`: the mock
-harness decomposes the brief into one trivial task and the tiers walk it
+harness decomposes the brief into `LOOP_MOCK_TASKS` (default 3) **independent** tasks
+and the tiers walk them
 `proposed → designing → implementing → reviewing → integrating → validating → done`
-through the correct role tokens, with the integrator role "merging" without per-task
-invocation. The board drains to `done` and the driver exits 0 — proving the
-driver + tier + substrate wiring with zero stochastic harness behaviour.
+through the correct role tokens, with the **concurrent pool** implementing them
+simultaneously (each in its own worktree) and the single integrator "merging" them
+FIFO. The board drains to `done` and the driver exits 0 — proving the driver + pool +
+merge-queue + substrate wiring with zero stochastic harness behaviour.
+
+```sh
+LOOP_MOCK_CONFLICT=1 make loop-selftest
+```
+
+Same, plus one task the integrator **rejects once** (simulating a rebase conflict, D3)
+before it merges — proving the merge-queue conflict policy still drains green.
+
+## Measure the gate (M18 — does the swarm beat the pipeline?)
+
+The M18 success gate is **quantitative**: a real multi-task feature must drain
+**faster** through the concurrent pool than through the serial pipeline, coherently.
+Run the same brief twice and compare wall-clock:
+
+```sh
+# Baseline — serial pipeline (pool of 1):
+make loop-reset && time LOOP_POOL_SIZE=1 make loop-run BRIEF=loop/examples/parallel-gate-brief.txt
+
+# Swarm — concurrent pool:
+make loop-reset && time LOOP_POOL_SIZE=3 make loop-run BRIEF=loop/examples/parallel-gate-brief.txt
+```
+
+`loop/examples/parallel-gate-brief.txt` decomposes into **three independent** tasks
+(new file + test each, no shared edits) so the pool can fan out. **Pass = the pool run's
+wall-clock beats the serial run**, `main` green throughout, the loop terminates, and
+the concurrency is visible: during the pool run, `ainarres status --watch --lane dev`
+(oversight token) shows **multiple implementers active at once**, and the end-of-run
+report's *activity by family* corroborates. This run is **owner-invoked** (the
+integrator is owner-launched, above) — the M18 gate / the milestone-scale self-build.
 
 ## Stopping
 
@@ -88,10 +134,13 @@ and their git/gh/node children) via a TERM→KILL `kill_tree` in an EXIT/INT/TER
 
 ## Resilience
 
-If a tier's sweep **ends still holding a task** (it stopped without advancing or
-releasing — e.g. it implemented but never committed), the driver **releases that claim
-immediately** after the sweep (`release_stranded` in `driver.sh`). The loop is
-serialized, so a returned sweep's worker is provably done; releasing bumps `attempts`
-(feeding M12 escalation), so the next tier/round picks the task up at once — no waiting
-for the lease. A sweep that is *killed* (interrupt) instead relies on lazy reclaim
-(ADR 0009): the lease expires and a later claim hands the task out again.
+If a sweep **ends still holding a task** (it stopped without advancing or releasing —
+e.g. it implemented but never committed), the driver **releases that claim immediately**
+after the sweep (`release_stranded` in `driver.sh`) — and the M18 pool reaps **each**
+member with its own `release_stranded`. A *returned* sweep's worker is provably done
+(it's no longer running), so releasing is safe even with the pool concurrent; releasing
+bumps `attempts` (feeding M12 escalation), so the next round picks the task up at once —
+no waiting for the lease. A sweep that is *killed* (interrupt) instead relies on lazy
+reclaim (ADR 0009): the lease expires and a later claim hands the task out again. On
+exit, the driver also `worktree gc`s any per-sweep checkouts (M17), so a crashed run
+leaves no orphans.
