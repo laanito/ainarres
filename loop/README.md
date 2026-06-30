@@ -39,9 +39,13 @@ models per tier via the `*_MODEL` vars.)
 
 **M18 — the primary cheap implementer is fanned out into a concurrent pool.** Each
 round launches `LOOP_POOL_SIZE` (default 3) simultaneous `cheap-implementer` sweeps
-(`roles.sh::LOOP_POOL_TIER`), each in its own M17 git worktree (`LOOP_SWEEP_ID`), so
-they implement independent DAG tasks at once without colliding on a checkout — this is
-the swarm's throughput. The remaining tiers (`LOOP_SERIAL_TIERS` = fallback, frontier)
+(`roles.sh::LOOP_POOL_TIER`), each isolated two ways so they implement independent DAG
+tasks at once without colliding: (1) its own **M17 git worktree** (`LOOP_SWEEP_ID`), and
+(2) its own **opencode session store** — a private `XDG_DATA_HOME` per sweep with the
+shared `auth.json` symlinked in. The opencode isolation is load-bearing: opencode keeps
+its session SQLite at `$XDG_DATA_HOME/opencode/opencode.db`, and concurrent opencode
+processes sharing it collide (`database is locked`) — the first real gate run collapsed
+the pool to one live worker for exactly this reason. This is the swarm's throughput. The remaining tiers (`LOOP_SERIAL_TIERS` = fallback, frontier)
 still run once each, serially, after the pool. **Integration stays single**: the lone
 frontier integrator drains `integrating` FIFO, rebasing on the latest default branch +
 re-validating before each merge — it *is* the merge queue (parallel-loop.md D2), which
