@@ -37,6 +37,14 @@ RUN_DIR="${RUN_DIR:-$REPO/loop/run}"     # per-tier sweep logs (gitignored)
 # task it failed; grok is the escalation ceiling.
 LOOP_TIERS=(cheap-implementer fallback-implementer frontier)
 
+# M18 split (ADR 0021): the primary cheap implementer is FANNED OUT into a concurrent
+# pool (LOOP_POOL_SIZE members per round — the swarm's throughput); the remaining tiers
+# run once each, serially, AFTER the pool, preserving tiering (fallback covers the
+# primary; frontier reviews/integrates + is the escalation ceiling). Integration stays
+# single (the frontier integrator IS the merge queue, parallel-loop.md D2).
+LOOP_POOL_TIER="${LOOP_POOL_TIER:-cheap-implementer}"
+LOOP_SERIAL_TIERS=(fallback-implementer frontier)
+
 # Token features per poller. The substrate trusts the signed token's features
 # (minus denials) — ADR 0007 — so this is the authoritative capability grant for
 # the run. In mock mode the frontier drops implementer/tier:2 (see header).

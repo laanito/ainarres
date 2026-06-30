@@ -1,0 +1,39 @@
+Add a small library of independent, pure display helpers under bin/lib/ — three
+self-contained utilities the CLI's M16 formatters can adopt later. They share NO code
+and NO files, so they are built INDEPENDENTLY and IN PARALLEL: this brief is the M18
+gate (parallel implementers + merge queue), so the decomposition must be a fan-out, not
+a chain.
+
+DESIGNER — decompose this into THREE INDEPENDENT tasks with NO `depends_on` between
+them (each is a new file + its own new test; none imports another). Do not add a
+wiring/integration task — these are standalone utilities. Independence is the point:
+the pool can only fan out if the tasks don't block each other.
+
+Task A — bin/lib/humanize-seconds.mjs
+  Export a PURE function `humanizeSeconds(n)` that turns an integer number of seconds
+  into a compact human string: 0 → "0s", 45 → "45s", 90 → "1m 30s", 3661 → "1h 1m 1s",
+  90000 → "1d 1h". Drop zero components except for the "0s" case; never print more than
+  the three largest non-zero units. Negative input → prefix "-" on the absolute value.
+  New test test/humanize-seconds.test.ts asserts the exact strings above (and that it
+  must FAIL on main — the function doesn't exist yet).
+  Per-task validate: `npx vitest run test/humanize-seconds.test.ts`
+
+Task B — bin/lib/pluralize.mjs
+  Export a PURE function `pluralize(n, singular, plural)` returning `"<n> <word>"` with
+  the right word: 1 → "1 task", 0 → "0 tasks", 2 → "2 tasks" (default plural = singular
+  + "s"; an explicit plural arg overrides, e.g. pluralize(2,"entry","entries") →
+  "2 entries"). New test test/pluralize.test.ts asserts those cases (and fails on main).
+  Per-task validate: `npx vitest run test/pluralize.test.ts`
+
+Task C — bin/lib/short-id.mjs
+  Export a PURE function `shortId(id)` returning the first 8 characters of a uuid-like
+  string (so `019f1a40-b823-...` → `019f1a40`); a string shorter than 8 chars is
+  returned unchanged; a non-string / empty input returns "". New test
+  test/short-id.test.ts asserts those cases (and fails on main).
+  Per-task validate: `npx vitest run test/short-id.test.ts`
+
+Each task is fully self-contained: one new file under bin/lib/, one new test file, no
+edits to any shared file (so no rebase conflicts — the merge queue rebases + re-validates
+each on the latest main and merges cleanly, one at a time). Keep each function pure (no
+I/O, no clock, no DB), exported as a named ESM export, matching the existing pure-helper
+style in bin/ainarres.mjs. Do NOT run the full suite as a per-task validate.
