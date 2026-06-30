@@ -46,7 +46,7 @@ create view api.board as
     fam.key                                                  as claimed_by_family,
     t.lease_expires_at,
     (t.claimed_by is not null and t.lease_expires_at < now()) as abandoned,
-    now() - t.updated_at                                     as age_in_stage,
+    date_trunc('second', now() - t.updated_at)               as age_in_stage,
     coalesce((
       select array_agg(dep.id)
       from unnest(t.depends_on) as dep(id)
