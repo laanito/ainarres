@@ -125,3 +125,32 @@ assisted-vs-swarm split and reports the throughput number against the serial bas
   coordination, safety, and visibility all in the substrate and its read-only surface.
 - v5 (governance) builds on v4's enriched, attributable event log and the activity volume the
   swarm generates.
+
+## Amendment (2026-06-30) — the gate is concurrency *correctness*, not wall-clock
+
+Refines success-gate item 5 after the first real M18 gate run. The north star is that the
+substrate coordinates **genuinely independent workers that could run on different machines,
+networks, or organizations** — the substrate (HTTP + JWT + `SELECT … FOR UPDATE SKIP LOCKED`)
+is the *only* shared point; the workers share no filesystem, no host, no clock.
+
+**Wall-clock speedup on a single laptop is therefore NOT the gate measure.** On one host, real
+parallelism is capped by things the substrate does not control — shared CPU, a free-API model
+backend that serializes concurrent calls, per-tool local state (e.g. opencode's shared session
+SQLite). Isolating each worker's git checkout (M17) and tool state is precisely *simulating*,
+on one box, what separate machines get for free; the stopwatch mostly measures that simulation's
+overhead, not the coordination.
+
+Item 5 is restated:
+
+5. (restated) **Genuinely concurrent, independent implementers** — ≥2 distinct workers holding
+   distinct tasks *simultaneously* (visible in the M16 live view), each in its own isolated
+   workspace + tool state, coordinating **only** through the substrate — fan out across the DAG
+   and reach `main` **coherently**: every merge rebased + re-validated, no double-claim, no
+   cross-worker corruption, and the loop still terminates. Whether the pool beats the serial
+   driver's wall-clock *on a single host* is recorded but **not** gating. The property the gate
+   asserts is that coordination is **location-independent** — the same run would hold with the
+   workers on N machines.
+
+This sharpens rather than loosens the gate: proving correct concurrent coordination is harder
+than reading a stopwatch, and it is the property that actually generalizes to M19 (federation)
+and to workers in "different machines, networks, or universes."

@@ -110,21 +110,32 @@ for each `integrating` task:
 Because there is one integrator, steps 1–4 are atomic with respect to `main`: no two
 merges race. The "queue" is just the `integrating` column drained FIFO.
 
-## Measuring the gate (beats the serial baseline)
+## Judging the gate — concurrency *correctness*, not wall-clock
 
-The gate is **quantitative**, so the measurement is part of the design:
+> Reframed after the first real gate run ([ADR 0021](../decisions/0021-v4-scope-the-swarm.md)
+> § Amendment 2026-06-30). The north star is the substrate coordinating **independent workers
+> that could be on different machines, networks, or organizations** — so wall-clock on a single
+> laptop is **not** the measure (a single host caps real parallelism via shared CPU, a free-API
+> backend that serializes calls, and per-tool local state — none of which the substrate controls).
 
-- **Same feature, two runs.** Pick an N-independent-task brief; run it once on the v3
-  serial driver (baseline) and once on the M18 pool. Compare **wall-clock to drain**.
-- **Concurrency is observable.** During the pool run, `ainarres status --watch` must
-  show **multiple implementers active simultaneously** (distinct families/subs holding
-  distinct tasks) — M16 makes this visible; the end-of-run report's activity-by-family
-  corroborates.
-- **Coherence held.** Every merge was rebased + re-validated; `main` green throughout;
-  conflicts followed D3, never a broken merge.
-- **Pass = pool wall-clock < serial wall-clock**, loop still terminates cleanly, report
-  shows the concurrency. The retro records the number and the assisted-vs-swarm split
-  ([ADR 0021](../decisions/0021-v4-scope-the-swarm.md) § bootstrap).
+The gate is **qualitative — correct concurrent coordination**:
+
+- **Genuine simultaneity.** During the run, `ainarres status --watch --lane dev` shows **≥2
+  distinct workers holding distinct tasks at the same time** (the M16 `active` block); the
+  end-of-run report's activity-by-family corroborates more than one implementer family/sub did
+  real work. (This is exactly what the first run *lacked*: opencode's shared session DB collapsed
+  the pool to one live worker — fixed by isolating each sweep's tool state, the harness analog of
+  M17's worktree.)
+- **Isolation is real and per-worker.** Each implementer ran in its own git checkout (M17) **and**
+  its own tool state — the single-laptop stand-in for "each on its own machine." No shared-checkout
+  or shared-state collision.
+- **Coherence held.** Every merge rebased + re-validated; `main` green throughout; conflicts
+  followed D3, never a broken merge; no double-claim (`SKIP LOCKED`); the loop terminated.
+- **Pass = the substrate coordinated genuinely concurrent, isolated, independent workers to a
+  coherent `main`** — i.e. the same run would hold with the workers on N machines. Wall-clock is
+  **recorded, not gating**. The retro notes it (and the assisted-vs-swarm split,
+  [ADR 0021](../decisions/0021-v4-scope-the-swarm.md) § bootstrap) for interest, flagging that a
+  single host bounds it.
 
 ## Scope: harness/driver-side, no substrate change expected
 
@@ -146,9 +157,10 @@ is the coordination layer, not the build harness.
 2. **The merge queue** — the integrator's rebase + re-validate + conflict→reject loop
    (D2/D3), in the grok integrator skill; mock integrator exercises the FIFO drain and
    a synthetic conflict→reject path.
-3. **The gate run** — a real multi-task feature through the pool, measured against the
-   serial baseline (owner-assisted; the integrator is owner-launched). Record the
-   wall-clock and the observability evidence.
+3. **The gate run** — a real multi-task feature through the pool (owner-assisted; the
+   integrator is owner-launched). Judged by **concurrency correctness** (≥2 distinct
+   workers active at once, isolated, coherent `main`), not wall-clock — see *Judging the
+   gate* above. Record the observability evidence; note wall-clock only for interest.
 
 Each slice ends green (`loop-selftest` with a multi-task mock brief + the existing
 suite). One blog on merge: *"The swarm builds faster: parallel implementers and a

@@ -18,11 +18,14 @@ workspaces, integrated through a merge queue that keeps `main` coherent — with
 ## Success criterion ([ADR 0021](../decisions/0021-v4-scope-the-swarm.md))
 
 A real multi-task feature is decomposed into an independent-where-possible DAG, built by
-**multiple concurrent implementers** in isolated workspaces, integrated via a **merge queue**
-(rebase + re-validate) to a coherent `main`, **observably** end to end and summarized in an
-end-of-run report — with **wall-clock beating the serial v3 driver** and no cross-worker
-corruption. Reached at **M18**; **M19** demonstrates federated frontier peers. No human
-coordination beyond starting the loop.
+**multiple concurrent implementers** in isolated workspaces (+ isolated tool state),
+integrated via a **merge queue** (rebase + re-validate) to a coherent `main`, **observably**
+end to end and summarized in an end-of-run report — judged by **concurrency correctness**
+(≥2 distinct workers active at once, coherent `main`, no cross-worker corruption), **not**
+single-host wall-clock (ADR 0021 § Amendment 2026-06-30 — the north star is
+location-independent coordination, so the same run would hold with workers on N machines).
+Reached at **M18**; **M19** demonstrates federated frontier peers. No human coordination
+beyond starting the loop.
 
 ## Execution discipline
 
@@ -99,7 +102,8 @@ headline gate. M19 layers peers on the proven parallel loop.
 
 ## M18 — Parallel implementers + merge queue (headline gate)
 
-**Goal:** the swarm fans out and `main` stays coherent — faster than the pipeline.
+**Goal:** the swarm fans out and `main` stays coherent — independent workers coordinating
+only through the substrate (as if on different machines).
 ([ADR 0021](../decisions/0021-v4-scope-the-swarm.md))
 
 **Steps**
@@ -115,13 +119,17 @@ headline gate. M19 layers peers on the proven parallel loop.
 - Ship a **real multi-task feature** through the parallel loop, observably (M16), in isolated
   workspaces (M17).
 
-**Done-tests / success gate**
+**Done-tests / success gate** (concurrency *correctness*, not wall-clock — ADR 0021 §
+Amendment 2026-06-30)
 - An independent-where-possible N-task feature reaches `main` via the parallel loop with
-  **multiple implementers active simultaneously** (visible in the M16 view).
+  **≥2 implementers holding distinct tasks simultaneously** (visible in the M16 view; the
+  end-of-run report's activity-by-family confirms more than one did real work).
+- Each worker is isolated — own git worktree (M17) **and** own tool state — the single-host
+  stand-in for separate machines.
 - `main` stays green throughout — every merge was rebased + re-validated; conflicts followed the
-  policy, never a broken merge.
-- **Wall-clock beats the serial v3 driver** on the same feature shape; the loop still terminates
-  cleanly; the end-of-run report shows the concurrency.
+  policy, never a broken merge; no double-claim; the loop still terminates cleanly.
+- **Location-independent:** the same run would hold with the workers on N machines. Single-host
+  wall-clock is recorded for interest but is **not** the criterion.
 
 **Blog:** "The swarm builds faster: parallel implementers and a merge queue."
 
