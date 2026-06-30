@@ -19,3 +19,7 @@ work/
 # Autonomous-loop run artifacts: per-poller logs + the STOP sentinel (M14). The
 # scripts + config under loop/ are committed; only runtime output is ignored.
 loop/run/
+
+# Per-sweep git worktrees for isolated parallel implementers (M17). Live checkouts
+# over the shared object store; created/torn down by loop/worktree.sh, never committed.
+.loop-worktrees/

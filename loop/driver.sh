@@ -89,6 +89,10 @@ stop_active() {
     sleep 1
     kill_tree "$CURRENT_SWEEP_PID" KILL
   fi
+  # Garbage-collect per-sweep worktrees (M17). The loop is serialized, so on exit no
+  # sweep is live → gc with no active ids clears them all; a crashed run leaves none
+  # behind. Best-effort: never let cleanup fail the run.
+  bash "$HERE/worktree.sh" gc >/dev/null 2>&1 || true
 }
 trap 'stop_active' EXIT
 trap 'printf "\n→ driver: interrupted — stopping the active sweep…\n"; exit 130' INT TERM
@@ -116,7 +120,11 @@ run_sweep() {
   local tier="$1" brief="${2:-}" rc=0 sub tok
   sub="$(uuidgen | tr 'A-Z' 'a-z')"
   tok="$(mint_token "$tier" "$sub")"
-  AINARRES_TOKEN="$tok" harness_sweep "$tier" "$brief" >>"$RUN_DIR/$tier.log" 2>&1 &
+  # LOOP_SWEEP_ID lets an implementer wrapper isolate itself in a per-sweep git
+  # worktree (M17): concurrent implementer processes (M18) won't collide on one
+  # checkout. The id = the sweep's known sub, so it's unique per process. Only the
+  # implementer wrappers act on it; designer/integrator sweeps work in the real repo.
+  AINARRES_TOKEN="$tok" LOOP_SWEEP_ID="$sub" harness_sweep "$tier" "$brief" >>"$RUN_DIR/$tier.log" 2>&1 &
   CURRENT_SWEEP_PID=$!
   wait "$CURRENT_SWEEP_PID" || rc=$?
   CURRENT_SWEEP_PID=""
