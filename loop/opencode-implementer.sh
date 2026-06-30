@@ -12,14 +12,25 @@ cd "$REPO"
 : "${AINARRES_TOKEN:?opencode-implementer: AINARRES_TOKEN must be set by the poller}"
 : "${AINARRES_BASE_URL:?opencode-implementer: AINARRES_BASE_URL must be set (from loop.env)}"
 
-# Per-sweep workspace isolation (M17): if the driver handed us a sweep id, run in our
-# own git worktree so concurrent implementers (M18) never collide on one checkout. The
-# agent makes its per-task `loop/<id>` branches INSIDE here; teardown on exit. No id
-# (standalone invocation) → run in the repo as before.
+# Per-sweep isolation (M17 + M18): if the driver handed us a sweep id, isolate BOTH
+# the git checkout AND opencode's own state, so concurrent implementers don't collide.
 if [ -n "${LOOP_SWEEP_ID:-}" ]; then
+  # 1. Git worktree (M17): our own checkout; the agent makes per-task `loop/<id>`
+  #    branches inside; teardown on exit.
   WT="$(bash "$REPO/loop/worktree.sh" enter "$LOOP_SWEEP_ID")"
   trap 'bash "$REPO/loop/worktree.sh" teardown "$LOOP_SWEEP_ID" >/dev/null 2>&1 || true' EXIT
   cd "$WT"
+
+  # 2. opencode session store (M18 gate finding): opencode keeps its session SQLite at
+  #    $XDG_DATA_HOME/opencode/opencode.db. Concurrent opencode processes share it and
+  #    collide ("database is locked"), which collapsed the M18 pool to one live worker.
+  #    Give each sweep a PRIVATE XDG_DATA_HOME (its own fresh opencode.db) while
+  #    symlinking the shared auth.json so the free-API credentials still resolve. Config
+  #    (XDG_CONFIG_HOME, ~/.config/opencode — models/providers) stays shared, read-only.
+  SRC_DATA="${XDG_DATA_HOME:-$HOME/.local/share}/opencode"
+  export XDG_DATA_HOME="$WT/.xdg/data"
+  mkdir -p "$XDG_DATA_HOME/opencode"
+  [ -f "$SRC_DATA/auth.json" ] && ln -sf "$SRC_DATA/auth.json" "$XDG_DATA_HOME/opencode/auth.json"
 fi
 
 MODEL="${OPENCODE_MODEL:-ollama/qwen3.6:35b-mlx}"
