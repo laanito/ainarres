@@ -29,6 +29,19 @@ jget() {
 
 ai() { "${AINARRES[@]}" "$@"; }
 
+# Per-sweep worktree isolation (M17), exercised in loop-selftest exactly as the real
+# cheap implementer does it: an implementer poller with a sweep id runs inside its own
+# git worktree (teardown on exit). `ai` resolves the CLI via BASH_SOURCE, so working
+# from the worktree is fine. Non-implementer pollers (designer/frontier) work in $REPO.
+case "$POLLER" in
+  cheap-implementer|fallback-implementer)
+    if [ -n "${LOOP_SWEEP_ID:-}" ]; then
+      WT="$(bash "$REPO/loop/worktree.sh" enter "$LOOP_SWEEP_ID")"
+      trap 'bash "$REPO/loop/worktree.sh" teardown "$LOOP_SWEEP_ID" >/dev/null 2>&1 || true' EXIT
+      cd "$WT"
+    fi ;;
+esac
+
 # One-shot decomposition: the driver calls `mock-harness.sh designer <brief>` once
 # to hand the brief to the designer. The mock turns the brief into ONE trivial,
 # self-contained task (validate `true`) so the plumbing test stays deterministic.

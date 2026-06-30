@@ -12,6 +12,16 @@ cd "$REPO"
 : "${AINARRES_TOKEN:?opencode-implementer: AINARRES_TOKEN must be set by the poller}"
 : "${AINARRES_BASE_URL:?opencode-implementer: AINARRES_BASE_URL must be set (from loop.env)}"
 
+# Per-sweep workspace isolation (M17): if the driver handed us a sweep id, run in our
+# own git worktree so concurrent implementers (M18) never collide on one checkout. The
+# agent makes its per-task `loop/<id>` branches INSIDE here; teardown on exit. No id
+# (standalone invocation) → run in the repo as before.
+if [ -n "${LOOP_SWEEP_ID:-}" ]; then
+  WT="$(bash "$REPO/loop/worktree.sh" enter "$LOOP_SWEEP_ID")"
+  trap 'bash "$REPO/loop/worktree.sh" teardown "$LOOP_SWEEP_ID" >/dev/null 2>&1 || true' EXIT
+  cd "$WT"
+fi
+
 MODEL="${OPENCODE_MODEL:-ollama/qwen3.6:35b-mlx}"
 
 # Resolve the opencode binary robustly. Pollers run in a non-interactive shell that

@@ -40,24 +40,37 @@ with two `git` calls. Containers (a sealed per-task toolchain) are **deferred** 
 they solve dependency isolation, which the loop does not yet need, at much higher
 cost. Revisit only if a task's build pollutes a shared toolchain.
 
-**D2 — Binding: task id → `.loop-worktrees/<task_id>` on branch `loop/<task_id>`.**
-The task id is the one stable key both planes share, and `SKIP LOCKED` guarantees a
-single holder per task — so keying the workspace on the task id alone is
-collision-free *even across concurrent processes*, with no coordination and no new
-substrate state. The wrapper derives both paths deterministically from the claimed
-id; creation is **idempotent** (reuse an existing worktree for a reclaimed task, or
-recreate it from base). `.loop-worktrees/` is gitignored.
+**D2 — Binding: per-sweep worktree `.loop-worktrees/<sweep_id>`, per-task branch
+`loop/<task_id>` inside it.** *(Refined during the build — see note.)* Each
+implementer **sweep process** gets one worktree, keyed by its sweep id (the known
+`sub` the driver already mints per sweep). The worktree **directory** and the
+per-task **branch** are decoupled: the harness makes a `loop/<task_id>` branch for
+each task *inside* its sweep worktree — that branch is the reviewer/integrator
+hand-off contract, independent of where the checkout lives. Creation is
+**idempotent** (reuse a live worktree, recreate a stale one from base);
+`.loop-worktrees/` is gitignored.
 
-**D3 — Lifecycle: create on claim, tear down on advance/release, GC the orphans.**
-- *Create* when a worker claims a task at the **implementing** stage (the only stage
-  that mutates a checkout — see scope below).
-- *Tear down* when the worker advances or releases the task: the work is now captured
-  on the pushed branch / PR, so the local worktree is disposable.
-- *GC* defensively: a sweep (and the driver, between rounds) runs
-  `git worktree prune` and removes any `.loop-worktrees/<id>` whose task is **terminal
-  or absent** from the board. GC must be **concurrency-safe** — it removes only
-  non-active worktrees, never one a live holder is using (the board's `claimed_by` +
-  non-terminal stage is the liveness check, readable via M16's view).
+> **Why per-sweep, not per-task** (the design said per-task; the code made the
+> constraint concrete): the real harnesses **self-claim inside an opaque
+> `opencode run`/grok process**, so the wrapper never sees the task id and *cannot*
+> key a worktree on it without restructuring the agent's claim loop. The collision
+> M17 exists to prevent is between concurrent **processes** — a per-process worktree
+> prevents it completely, and `SKIP LOCKED` already guarantees no two processes hold
+> the same task. Per-task *branches* (the hand-off) are preserved. This is also the
+> grain grok's native `--worktree` uses (per invocation). Net: simpler, uniform
+> across mock and real, no agent-skill surgery, no new substrate state.
+
+**D3 — Lifecycle: enter on sweep start, tear down on sweep exit, GC the orphans.**
+- *Create* when an **implementer** sweep starts (the wrapper calls `worktree enter
+  <sweep_id>` and `cd`s in). Implementing is the only stage that mutates a checkout —
+  see scope below.
+- *Tear down* on sweep exit (a `trap … EXIT`): the work is captured on the pushed
+  `loop/<task_id>` branch / PR, so the local worktree is disposable.
+- *GC* defensively: the driver runs `worktree gc` on exit (and could between rounds).
+  Because the v3 driver is **serialized**, no sweep is live at exit → `gc` with no
+  active ids clears them all; a crashed run leaves none behind. When M18 runs a pool,
+  `gc <active sweep ids…>` keeps only the live processes' worktrees — concurrency-safe
+  by construction (a sweep id maps 1:1 to a running process).
 
 **D4 — The substrate stays agnostic.** No migration, no `workspace` column, no new
 verb. The task id (already returned by `claim`) is the entire contract. If the loop
