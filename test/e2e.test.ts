@@ -75,9 +75,11 @@ beforeAll(async () => {
 describe("snippet-factory end to end (scripted worker via the CLI)", () => {
   it("create → worker solves & self-validates → reviewer verifies → done", async () => {
     park();
+    // The worker creates the task it will work (D4: create needs the starter role,
+    // role:worker on snippets — a reviewer cannot freelance-create work here).
     const created = cli(
       ["create", "--lane", "snippets", "--instructions", "export add(a,b)", "--entry", ENTRY, "--validate", VALIDATE],
-      REVIEWER,
+      WORKER,
     );
     expect(created.ok).toBe(true);
     const id = created.task.id;
@@ -124,7 +126,7 @@ describe("snippet-factory end to end (scripted worker via the CLI)", () => {
     park();
     const id = cli(
       ["create", "--lane", "snippets", "--instructions", "export add(a,b)", "--entry", ENTRY, "--validate", VALIDATE],
-      REVIEWER,
+      WORKER,
     ).task.id;
 
     // Worker submits a WRONG solution (skips the self-check), advances to review.

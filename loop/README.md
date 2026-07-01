@@ -10,8 +10,9 @@ loop/
   driver.sh                the dumb driver: brief → designer → each round runs a CONCURRENT
                            pool of cheap implementers + the serial tiers → stop when drained
   worktree.sh              per-sweep git worktree isolation (M17): enter/teardown/gc
-  roles.sh                 config: the pool tier + serial tiers + each tier's harness, token features
-  grok-frontier.sh         real frontier harness wrapper (grok; designer/reviewer/integrator/escalated-impl)
+  roles.sh                 config: the pool tier + serial tiers + frontier peers + each tier's harness, token features
+  grok-frontier.sh         real frontier harness wrapper (grok; reviewer + the SINGLE integrator + escalated impl)
+  claude-frontier.sh       real frontier PEER wrapper (M19; claude — opus designer / sonnet reviewer, never integrates)
   opencode-implementer.sh  real cheap-implementer harness wrapper (opencode; isolates in a worktree)
   mock-harness.sh          deterministic stand-in (LOOP_MODE=mock) for the plumbing test
   examples/                feature briefs (incl. parallel-gate-brief.txt — the M18 gate)
@@ -20,11 +21,13 @@ loop/
 
 ## Worker tiers (capability order, cheapest first)
 
-| Tier | Harness / family | Role(s) |
+| Tier / peer | Harness / family | Role(s) |
 |---|---|---|
 | `cheap-implementer` | `opencode + big-pickle` (free API) | implementer (primary) |
 | `fallback-implementer` | `opencode + nemotron-3-ultra` (free API) | implementer (fallback) |
-| `frontier` | `grok + grok-build` | designer, reviewer, integrator, **escalated** implementer (`tier:2`) |
+| `designer` | `claude-code + opus` | designer (one-shot decomposition) |
+| `frontier` | `grok + grok-build` | reviewer + the **single integrator** + **escalated** implementer (`tier:2`) |
+| `frontier-claude-reviewer` | `claude-code + sonnet` | reviewer (M19 peer, **never** integrates) |
 
 The driver sweeps the tiers **in this order, in rounds** (`roles.sh::LOOP_TIERS`).
 Because each cheap tier runs to "nothing claimable" *before* the next runs, big-pickle
@@ -52,6 +55,21 @@ re-validating before each merge — it *is* the merge queue (parallel-loop.md D2
 is what keeps `main` coherent while implementing runs wide. A rebase conflict or a
 post-rebase validate failure rejects the task back to `implementing` (D3), never a
 dirty merge.
+
+**M19 — the frontier role is federated across peers.** The one-shot `designer` runs on
+`claude-code + opus`; each round, after the serial tiers, the **frontier peers**
+(`roles.sh::LOOP_FRONTIER_PEERS` = `grok` + the `claude-code + sonnet` reviewer) sweep
+**concurrently** (`driver.sh::run_concurrent`). A `reviewing` task is claimed by whoever
+is free — `SKIP LOCKED` distributes it across families — so a claude reviewer routinely
+verifies grok/opencode-authored work: the prize is **uncorrelated failure**, one family
+catching what another's blind spots miss. It is *measured, not enforced* (the end-of-run
+report attributes review per family; nothing blocks on cross-family review, so a peer
+being down never stalls the board — design/federation.md D3). **Only `grok` holds
+`capability:integrate`**, so integration stays the single merge queue even though review
+fans out; the claude reviewer never receives an `integrating` task (D1/D5). Creation is
+gated to the starter role too (`role:designer` on dev, D4) — a cheap implementer cannot
+freelance-create work. Swap the claude models per role via `CLAUDE_DESIGNER_MODEL` /
+`CLAUDE_REVIEWER_MODEL`.
 
 Token features per tier live in `roles.sh::role_features` and are authoritative for
 the run (the substrate trusts the signed token's features minus denials — ADR 0007).

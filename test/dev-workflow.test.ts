@@ -75,6 +75,25 @@ describe("ainarres-dev gating through the verbs", () => {
     expect(impl.code).toBe("empty");
   });
 
+  it("won't let a non-designer CREATE a dev task (M19 D4: create-vs-advance)", async () => {
+    // Creating a task is a starter act — it lands at `proposed`, whose only outbound
+    // advance needs role:designer. A cheap implementer (lane member, but no
+    // role:designer) must be refused, so it can't freelance-create work off-script.
+    const impl = await json(await rpc("create_task", {
+      token: tok(["lane:dev", "role:implementer"]),
+      body: { lane_key: "dev", payload: { goal: "freelance" } },
+    }));
+    expect(impl.ok).toBe(false);
+    expect(impl.code).toBe("not_eligible");
+
+    // A designer (holds the starter role) still creates fine.
+    const ok = await json(await rpc("create_task", {
+      token: tok(["lane:dev", "role:designer"]),
+      body: { lane_key: "dev", payload: { goal: "legit" } },
+    }));
+    expect(ok.ok).toBe(true);
+  });
+
   it("lets a designer advance proposed→designing, and refuses a non-designer that step", async () => {
     parkDev();
     const designer = tok(["lane:dev", "role:designer"]);

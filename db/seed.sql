@@ -312,6 +312,25 @@ join app.features ft on ft.name = any (array['lane:dev', 'role:integrator', 'cap
 where f.key = 'grok+grok-build'
 on conflict (family_id, feature_id) do nothing;
 
+-- ── M19: the claude frontier review peer (federation, ADR 0021 · design/federation.md) ──
+-- Federate the non-privileged frontier roles across MAKERS. claude-code+opus already
+-- exists (seeded above with role:designer — the design peer). Add claude-code+sonnet as
+-- the REVIEW peer: split by model per role (design/federation.md D2 — opus for design
+-- judgment, sonnet for review), two DISTINCT families, the same split we run with
+-- opencode+zen / opencode+qwen. NEITHER claude family holds capability:integrate — the
+-- single grok integrator stays the only family that can merge (D1/D5). Sharing REVIEW is
+-- what buys uncorrelated failure: a claude reviewer catches what grok's blind spots miss.
+insert into app.agent_families (key, description) values
+  ('claude-code+sonnet', 'Claude Code harness, Sonnet model — M19 frontier review peer (no capability:integrate)')
+on conflict (key) do nothing;
+
+insert into app.family_features (family_id, feature_id)
+select f.id, ft.id
+from app.agent_families f
+join app.features ft on ft.name = any (array['lane:dev', 'role:reviewer'])
+where f.key = 'claude-code+sonnet'
+on conflict (family_id, feature_id) do nothing;
+
 -- ── Roster: opencode + big-pickle (cheap implementer) ────────────────────────
 -- An API-driven model available through opencode (free, rate-limited). A second
 -- CHEAP implementer alongside opencode+qwen3.6: holds role:implementer on lane:dev

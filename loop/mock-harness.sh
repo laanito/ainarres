@@ -88,10 +88,16 @@ while true; do
     designer:designing)     ai advance "$id" --to implementing --note "mock: spec ready"  >/dev/null ;;
     cheap-implementer:implementing|fallback-implementer:implementing)
                             ai advance "$id" --to reviewing    --note "mock: implemented" --branch "dev/$id" >/dev/null ;;
-    frontier:reviewing)     ai advance "$id" --to integrating  --note "mock: review ok" >/dev/null ;;
+    # M19: reviewing/validating are FEDERATED — grok OR the claude reviewer peer may own
+    # them (SKIP LOCKED gives each concurrent sweep a distinct task; cross-family review
+    # is thus demonstrated deterministically). integrating stays grok-only (the single
+    # integrator holds capability:integrate; the claude reviewer never gets such a task).
+    frontier:reviewing|frontier-claude-reviewer:reviewing)
+                            ai advance "$id" --to integrating  --note "mock: review ok ($POLLER)" >/dev/null ;;
     frontier:integrating)   ai advance "$id" --to validating   --note "mock: merged" \
                               --pr "https://example.invalid/pr/$id" --branch "dev/$id" --commit "mock$id" >/dev/null ;;
-    frontier:validating)    ai advance "$id" --to done         --note "mock: green on main" >/dev/null ;;
+    frontier:validating|frontier-claude-reviewer:validating)
+                            ai advance "$id" --to done         --note "mock: green on main ($POLLER)" >/dev/null ;;
     *)
       # Not this poller's stage (shouldn't happen given the eligibility gates);
       # release it so the right poller can take it, without forcing a transition.
