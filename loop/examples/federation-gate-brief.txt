@@ -1,0 +1,66 @@
+Add three more independent, pure display helpers under bin/lib/ — self-contained
+utilities the CLI's M16 formatters can adopt later. They share NO code and NO files, so
+they are built INDEPENDENTLY and IN PARALLEL.
+
+This is the M19 FEDERATION GATE brief (design/federation.md, Slice C). The point is NOT
+just that it drains: it is that review is shared across frontier FAMILIES. With three
+tasks reaching `reviewing` around the same time, the two concurrent frontier peers —
+grok+grok-build and claude-code+sonnet — should BOTH pick up reviews (SKIP LOCKED hands
+each whoever is free). The gate is judged by the end-of-run report (built in Slice B):
+the `cross-family review: N/M` line and the per-task `by family:` lines should show at
+least one task REVIEWED BY A DIFFERENT FAMILY than implemented it — ideally that a
+claude reviewer verified grok/opencode-authored work. Integration stays single (only
+grok holds capability:integrate).
+
+NOTE — gate briefs are SINGLE-USE: each run ships its tasks to `main`, so a re-run needs
+a fresh brief whose work doesn't exist yet. These three helpers are NOT yet on `main`
+(existing ones: clamp, humanize-seconds, ordinal, percent, pluralize, short-id — do not
+touch those).
+
+DESIGNER — decompose this into THREE INDEPENDENT tasks with NO `depends_on` between them
+(each is a new file + its own new test; none imports another). Do NOT add a
+wiring/integration task — these are standalone utilities. Independence is the point: the
+pool fans out AND three reviews exist at once, which is what lets the review peers split
+the work across families.
+
+Task A — bin/lib/truncate.mjs
+  Export a PURE function `truncate(str, max)` (max ≥ 1) returning str unchanged when
+  str.length ≤ max, else the first (max − 1) characters followed by a single ellipsis
+  character "…" (U+2026), so the result length equals max:
+    truncate("hello", 5) → "hello"
+    truncate("hello", 4) → "hel…"
+    truncate("hi", 5)    → "hi"
+    truncate("hello", 1) → "…"
+    truncate("", 3)      → ""
+  New test test/truncate.test.ts asserts those cases (and must FAIL on main — the file
+  doesn't exist yet).
+  Per-task validate: `npx vitest run test/truncate.test.ts`
+
+Task B — bin/lib/capitalize.mjs
+  Export a PURE function `capitalize(str)` that upper-cases only the FIRST character and
+  leaves the rest of the string unchanged:
+    capitalize("hello")     → "Hello"
+    capitalize("Hello")     → "Hello"
+    capitalize("hi there")  → "Hi there"
+    capitalize("a")         → "A"
+    capitalize("123")       → "123"
+    capitalize("")          → ""
+  New test test/capitalize.test.ts asserts those cases (and fails on main).
+  Per-task validate: `npx vitest run test/capitalize.test.ts`
+
+Task C — bin/lib/list-join.mjs
+  Export a PURE function `listJoin(items)` joining an array of strings into English
+  prose with "and" before the last element and NO Oxford comma:
+    listJoin([])            → ""
+    listJoin(["a"])         → "a"
+    listJoin(["a","b"])     → "a and b"
+    listJoin(["a","b","c"]) → "a, b and c"
+    listJoin(["a","b","c","d"]) → "a, b, c and d"
+  New test test/list-join.test.ts asserts those cases (and fails on main).
+  Per-task validate: `npx vitest run test/list-join.test.ts`
+
+Each task is fully self-contained: one new file under bin/lib/, one new test file, no
+edits to any shared file (so no rebase conflicts — the merge queue rebases + re-validates
+each on the latest main and merges cleanly, one at a time). Keep each function pure (no
+I/O, no globals, no clock). Never invent stages; leaving a task at its correct terminal
+result is the complete outcome.
