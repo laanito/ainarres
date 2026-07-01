@@ -168,6 +168,28 @@ run_pool() {
   POOL_PIDS=()
 }
 
+# ── M19: run a set of DISTINCT frontier peers concurrently ────────────────────
+# Like run_pool, but each concurrent sweep is a DIFFERENT poller (grok reviewer/
+# integrator + the claude reviewer), so the frontier ROLE is federated: whoever is
+# free claims the next reviewing task (SKIP LOCKED distributes across families). Only
+# grok holds capability:integrate, so integration stays single even though review fans
+# out. Each peer gets its own sub → its own stranded-release (design/federation.md).
+run_concurrent() {
+  local pollers=("$@") i name sub tok pids=() subs=() toks=()
+  for name in "${pollers[@]}"; do
+    sub="$(uuidgen | tr 'A-Z' 'a-z')"
+    tok="$(mint_token "$name" "$sub")"
+    AINARRES_TOKEN="$tok" LOOP_SWEEP_ID="$sub" harness_sweep "$name" >>"$RUN_DIR/$name.log" 2>&1 &
+    pids+=("$!"); subs+=("$sub"); toks+=("$tok")
+  done
+  POOL_PIDS=("${pids[@]}")                 # expose to stop_active for the kill trap
+  for i in "${!pids[@]}"; do
+    wait "${pids[$i]}" || true
+    release_stranded "${subs[$i]}" "${toks[$i]}"
+  done
+  POOL_PIDS=()
+}
+
 echo "→ driver: loop substrate = ${AINARRES_BASE_URL} (mode=$LOOP_MODE)"
 if ! ai board --lane "$LOOP_LANE" --token "$OVERSIGHT_TOKEN" >/dev/null 2>&1; then
   echo "driver: cannot reach the loop substrate at $AINARRES_BASE_URL." >&2
@@ -203,7 +225,7 @@ fi
 #    OR the board drains. Termination is unchanged in spirit: board empty AND no
 #    sweep in flight (run_pool/run_sweep both reap before returning, so when the round
 #    body finishes nothing is running — D4).
-echo "→ driver: pool=${LOOP_POOL_SIZE}× '${LOOP_POOL_TIER}' per round; then serial: ${LOOP_SERIAL_TIERS[*]}"
+echo "→ driver: pool=${LOOP_POOL_SIZE}× '${LOOP_POOL_TIER}' per round; serial: ${LOOP_SERIAL_TIERS[*]}; frontier peers: ${LOOP_FRONTIER_PEERS[*]}"
 round=0
 while true; do
   round=$((round + 1))
@@ -214,6 +236,10 @@ while true; do
     echo "→ round $round: tier '$tier' sweeping…"
     run_sweep "$tier" || echo "  (tier '$tier' sweep exited non-zero — continuing)"
   done
+  # M19: the frontier peers (grok + claude reviewer) sweep CONCURRENTLY — review fans
+  # across families, integration stays single (only grok holds capability:integrate).
+  echo "→ round $round: frontier peers concurrently: ${LOOP_FRONTIER_PEERS[*]}…"
+  run_concurrent "${LOOP_FRONTIER_PEERS[@]}"
   read -r active blocked <<<"$(counts)"
   after="$(board_sig)"
   echo "  round $round complete: ${active} active, ${blocked} blocked"

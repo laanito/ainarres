@@ -4,10 +4,14 @@
 # routing. The driver reads this and nothing here decides which task goes where —
 # the substrate does that.
 #
-# Cast for v3 — worker TIERS in capability order (cheapest first):
-#   cheap-implementer     opencode + big-pickle        role:implementer  (primary, free API)
-#   fallback-implementer  opencode + nemotron-3-ultra  role:implementer  (fallback, free API)
-#   frontier              grok + grok-build            designer/reviewer/integrator/escalated-impl
+# Cast (v3 tiers + M19 federated frontier peers) in capability order (cheapest first):
+#   cheap-implementer          opencode + big-pickle        role:implementer  (primary, free API)
+#   fallback-implementer       opencode + nemotron-3-ultra  role:implementer  (fallback, free API)
+#   designer                   claude-code + opus           role:designer     (one-shot decomposition)
+#   frontier                   grok + grok-build            reviewer + the SINGLE integrator (+escalated impl)
+#   frontier-claude-reviewer   claude-code + sonnet         role:reviewer     (M19 peer, never integrates)
+# The frontier ROLE is federated: grok and the claude reviewer run CONCURRENTLY each
+# round as peers (LOOP_FRONTIER_PEERS), neither privileged — only grok can integrate.
 # The driver sweeps the tiers IN THIS ORDER each round (see driver.sh): each cheap
 # tier drains the `implementing` work it can before the next runs, so the fallback
 # only sees what the primary left (it down/depleted, or a task it failed) and the
@@ -40,10 +44,19 @@ LOOP_TIERS=(cheap-implementer fallback-implementer frontier)
 # M18 split (ADR 0021): the primary cheap implementer is FANNED OUT into a concurrent
 # pool (LOOP_POOL_SIZE members per round — the swarm's throughput); the remaining tiers
 # run once each, serially, AFTER the pool, preserving tiering (fallback covers the
-# primary; frontier reviews/integrates + is the escalation ceiling). Integration stays
-# single (the frontier integrator IS the merge queue, parallel-loop.md D2).
+# primary). Integration stays single (the grok integrator IS the merge queue,
+# parallel-loop.md D2).
 LOOP_POOL_TIER="${LOOP_POOL_TIER:-cheap-implementer}"
-LOOP_SERIAL_TIERS=(fallback-implementer frontier)
+LOOP_SERIAL_TIERS=(fallback-implementer)
+
+# M19 federation (design/federation.md): the frontier ROLE is shared by MULTIPLE
+# families as peers, none privileged. These pollers run CONCURRENTLY each round (after
+# the serial tiers), so a reviewing task is claimed by whoever is free — grok or the
+# claude reviewer — and cross-family review happens naturally (SKIP LOCKED distributes;
+# measured, not enforced — D3). grok additionally holds capability:integrate and is the
+# SINGLE integrator (the merge queue); the claude reviewer never integrates (D1/D5). The
+# one-shot designer (below) is a claude+opus peer; grok stays co-eligible for design.
+LOOP_FRONTIER_PEERS=(frontier frontier-claude-reviewer)
 
 # Token features per poller. The substrate trusts the signed token's features
 # (minus denials) — ADR 0007 — so this is the authoritative capability grant for
@@ -58,7 +71,8 @@ role_features() {
       else
         echo "lane:dev,role:designer,role:reviewer,role:integrator,capability:integrate,role:implementer,tier:2"
       fi ;;
-    designer) echo "lane:dev,role:designer" ;;   # used for the one-shot brief hand-off
+    frontier-claude-reviewer) echo "lane:dev,role:reviewer" ;;  # M19 peer: reviews, never integrates (no capability:integrate)
+    designer) echo "lane:dev,role:designer" ;;   # one-shot brief hand-off (claude+opus peer)
     oversight) echo "" ;;
     *) echo "" ;;
   esac
@@ -67,10 +81,12 @@ role_features() {
 # Agent family (harness+model) for a poller — the durable identity (ADR 0007).
 role_family() {
   case "$1" in
-    cheap-implementer)    echo "opencode+big-pickle" ;;        # primary cheap implementer (free API)
-    fallback-implementer) echo "opencode+nemotron-3-ultra" ;;  # fallback (free API, more capable)
-    oversight)            echo "loop+driver" ;;
-    *)                    echo "grok+grok-build" ;;   # frontier + designer hand-off
+    cheap-implementer)        echo "opencode+big-pickle" ;;        # primary cheap implementer (free API)
+    fallback-implementer)     echo "opencode+nemotron-3-ultra" ;;  # fallback (free API, more capable)
+    designer)                 echo "claude-code+opus" ;;           # M19: opus for design judgment
+    frontier-claude-reviewer) echo "claude-code+sonnet" ;;         # M19: sonnet for review (distinct family)
+    oversight)                echo "loop+driver" ;;
+    *)                        echo "grok+grok-build" ;;            # frontier (reviewer + the single integrator)
   esac
 }
 
@@ -105,8 +121,17 @@ harness_sweep() {
     fallback-implementer)
       OPENCODE_MODEL="${OPENCODE_FALLBACK_MODEL:-openrouter/nvidia/nemotron-3-ultra-550b-a55b:free}" \
         eval "${OPENCODE_FALLBACK_CMD:-bash \"$REPO/loop/opencode-implementer.sh\"}" ;;
-    frontier|designer)
+    frontier)
+      # grok: reviewer + the single integrator (+ escalated tier:2 implementer).
       GROK_BRIEF="$brief" eval "${GROK_FRONTIER_CMD:-bash \"$REPO/loop/grok-frontier.sh\"}" ;;
+    designer)
+      # M19: the one-shot decomposition runs on claude+opus (design judgment).
+      CLAUDE_MODEL="${CLAUDE_DESIGNER_MODEL:-opus}" CLAUDE_BRIEF="$brief" \
+        eval "${CLAUDE_FRONTIER_CMD:-bash \"$REPO/loop/claude-frontier.sh\"}" ;;
+    frontier-claude-reviewer)
+      # M19: the claude reviewer peer (sonnet). Reviews only; holds no capability:integrate.
+      CLAUDE_MODEL="${CLAUDE_REVIEWER_MODEL:-sonnet}" \
+        eval "${CLAUDE_FRONTIER_CMD:-bash \"$REPO/loop/claude-frontier.sh\"}" ;;
     *) echo "roles.sh: no real harness for poller '$poller'" >&2; return 2 ;;
   esac
 }
