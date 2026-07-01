@@ -245,4 +245,65 @@ describe("formatReport", () => {
     const out = formatReport({ board: [{ task_id: "s", is_terminal: true }], timeline: [] });
     expect(out).toContain("  - s  (no PR ref)");
   });
+
+  // ── Per-task family attribution & cross-family summary ──────────────────
+
+  test("shipped task attribution shows families for each stage, em-dash when absent", () => {
+    // T1: implementing→reviewing family "opencode+big-pickle", reviewing→integrating family "claude-code+sonnet"
+    const board = [
+      { task_id: "T1", is_terminal: true },
+    ];
+    const timeline = [
+      { task_id: "T1", type: "transition", family: "opencode+big-pickle", data: { from: "implementing", to: "reviewing" } },
+      { task_id: "T1", type: "transition", family: "claude-code+sonnet", data: { from: "reviewing", to: "integrating" } },
+    ];
+    const out = formatReport({ board, timeline });
+    expect(out).toContain("  - T1");
+    expect(out).toContain("      by family: implemented=opencode+big-pickle reviewed=claude-code+sonnet integrated=\u2014");
+    // Cross-family: reviewed-by != implemented-by → counted
+    expect(out).toContain("      cross-family review: 1/1 shipped tasks reviewed by a different family than implemented");
+  });
+
+  test("same family for implementing and reviewing is not cross-family", () => {
+    const board = [
+      { task_id: "T1", is_terminal: true },
+    ];
+    const timeline = [
+      { task_id: "T1", type: "transition", family: "same-family", data: { from: "implementing", to: "reviewing" } },
+      { task_id: "T1", type: "transition", family: "same-family", data: { from: "reviewing", to: "integrating" } },
+    ];
+    const out = formatReport({ board, timeline });
+    // Task is in M (has both families) but NOT in N (same family)
+    expect(out).toContain("      cross-family review: 0/1 shipped tasks reviewed by a different family than implemented");
+  });
+
+  test("shipped task with no reviewing transition shows em-dash and does not crash", () => {
+    const board = [
+      { task_id: "T1", is_terminal: true },
+    ];
+    const timeline = [
+      { task_id: "T1", type: "transition", family: "opencode+qwen", data: { from: "implementing", to: "reviewing" } },
+      // No reviewing→integrating transition
+    ];
+    const out = formatReport({ board, timeline });
+    expect(out).toContain("      by family: implemented=opencode+qwen reviewed=\u2014 integrated=\u2014");
+    // No task has both implemented-by and reviewed-by → M=0
+    expect(out).toContain("      cross-family review: n/a (no reviewed tasks)");
+  });
+
+  test("cross-family review shows n/a when no shipped task has both families", () => {
+    const board = [
+      { task_id: "T1", is_terminal: true },
+    ];
+    // No transitions at all
+    const out = formatReport({ board, timeline: [] });
+    expect(out).toContain("      by family: implemented=\u2014 reviewed=\u2014 integrated=\u2014");
+    expect(out).toContain("      cross-family review: n/a (no reviewed tasks)");
+  });
+
+  test("empty/partial timeline does not throw", () => {
+    const out = formatReport({});
+    expect(out).toContain("shipped (0):");
+    expect(out).toContain("cross-family review: n/a (no reviewed tasks)");
+  });
 });
