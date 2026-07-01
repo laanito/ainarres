@@ -225,6 +225,20 @@ export function formatEvents(rows = [], { limit = 50 } = {}) {
 // board + event timeline a drained loop comes back to. Names what shipped (with
 // PRs), what failed and why, escalations, and per-family activity. No I/O, no
 // clock — the driver fetches the rows and passes them here.
+// Scan timeline for the first transition event matching taskId + stage transition.
+// Returns the acting family (non-empty string), or null if not found or family absent.
+function familyOfTransition(timeline, taskId, from, to) {
+  for (const ev of timeline) {
+    if (ev.type !== "transition") continue;
+    if (ev.task_id !== taskId) continue;
+    if (ev.data?.from !== from || ev.data?.to !== to) continue;
+    const family = ev.family;
+    if (family && typeof family === "string" && family.length > 0) return family;
+    return null; // found but family is null/empty → treat as unknown
+  }
+  return null;
+}
+
 export function formatReport({ board = [], timeline = [] } = {}, { lane = null } = {}) {
   const lines = [lane ? `end-of-run report — lane ${lane}` : "end-of-run report — all lanes"];
 
@@ -245,7 +259,32 @@ export function formatReport({ board = [], timeline = [] } = {}, { lane = null }
   const shipped = board.filter((r) => r.is_terminal === true);
   lines.push(`shipped (${shipped.length}):`);
   if (shipped.length === 0) lines.push("  (none)");
-  for (const row of shipped) lines.push(`  - ${row.task_id}  ${prFor(row.task_id) ?? "(no PR ref)"}`);
+  for (const row of shipped) {
+    lines.push(`  - ${row.task_id}  ${prFor(row.task_id) ?? "(no PR ref)"}`);
+    // Per-task stage→family attribution.
+    const implBy = familyOfTransition(timeline, row.task_id, "implementing", "reviewing");
+    const revBy = familyOfTransition(timeline, row.task_id, "reviewing", "integrating");
+    const intBy = familyOfTransition(timeline, row.task_id, "integrating", "validating");
+    lines.push(`      by family: implemented=${implBy ?? "\u2014"} reviewed=${revBy ?? "\u2014"} integrated=${intBy ?? "\u2014"}`);
+  }
+
+  // Cross-family review summary.
+  const reviewedTasks = shipped.filter((row) => {
+    const implBy = familyOfTransition(timeline, row.task_id, "implementing", "reviewing");
+    const revBy = familyOfTransition(timeline, row.task_id, "reviewing", "integrating");
+    return implBy != null && revBy != null;
+  });
+  const M = reviewedTasks.length;
+  const N = reviewedTasks.filter((row) => {
+    const implBy = familyOfTransition(timeline, row.task_id, "implementing", "reviewing");
+    const revBy = familyOfTransition(timeline, row.task_id, "reviewing", "integrating");
+    return revBy !== implBy;
+  }).length;
+  if (M > 0) {
+    lines.push(`      cross-family review: ${N}/${M} shipped tasks reviewed by a different family than implemented`);
+  } else {
+    lines.push(`      cross-family review: n/a (no reviewed tasks)`);
+  }
 
   // What failed: blocked tasks, with the reason.
   const failed = board.filter((r) => r.blocked === true);
