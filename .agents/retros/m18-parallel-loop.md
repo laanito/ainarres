@@ -2,8 +2,8 @@
 
 - Date: 2026-07-01
 - PRs: design #55, slices 1+2 #56, opencode-isolation fix #60, gate reframe #61,
-  fresh gate brief #62; gate-run output below. Built-by-swarm: #57/#58/#59 (run 1),
-  #63/#64/#65 (run 2 — the passing gate).
+  fresh gate brief #62; post-gate isolation-tail fix #67; gate-run output below.
+  Built-by-swarm: #57/#58/#59 (run 1), #63/#64/#65 (run 2 — the passing gate).
 - Plan: [v4-plan.md](../plans/v4-plan.md) (M18) · Design: [parallel-loop.md](../design/parallel-loop.md)
 - Implements: [ADR 0021](../decisions/0021-v4-scope-the-swarm.md) (+ its 2026-06-30 amendment)
 
@@ -100,6 +100,17 @@ captured legibly in the M16 timeline.
   co-eligible-peer path absorbs it, but it caps single-host throughput.
 - **Gate briefs are single-use** (#62): each run ships to `main`, so a re-run needs a
   fresh brief — the owner caught the original being already-built.
+- **The #60 fix had a tail (fixed post-gate, #67).** Parking each sweep's opencode
+  `XDG_DATA_HOME` *inside* the worktree (`$WT/.xdg`) meant that worktree's own git saw
+  the ~thousands of `.xdg/*` state files as untracked; two implementers ran `git add -A`
+  and staged ~16k / ~6k of them. The event log tells the story: two tasks bounced
+  `integrating→implementing` (the merge queue rejecting a polluting diff, defense-in-depth
+  working — every polluted branch was caught) and looped a second time before landing.
+  That extra churn is exactly why grok showed ~8× opencode's event count on the gate run.
+  Fix: keep tool state *beside* the checkout, not inside it — `XDG_DATA_HOME` now lives at
+  `$RUN_DIR/xdg/<sweep>` (gitignored, outside any worktree), so `git add -A` can't reach
+  it and the pollution is structurally impossible. The lesson from finding #1 restated,
+  applied correctly: isolate the tool's state *next to* the checkout, never within it.
 - **The human kill** accelerated lease-expiry; a truly unattended run self-heals via the
   lease. Worth a dedicated unattended-resilience test later.
 

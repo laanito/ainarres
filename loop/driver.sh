@@ -101,6 +101,11 @@ stop_active() {
   # Garbage-collect per-sweep worktrees (M17). On exit no sweep is live → gc with no
   # active ids clears them all; a crashed run leaves none behind. Best-effort.
   bash "$HERE/worktree.sh" gc >/dev/null 2>&1 || true
+  # Per-sweep opencode state (M18): each implementer sweep parks its private
+  # XDG_DATA_HOME under $RUN_DIR/xdg/<sweep> (beside the worktree, never inside it, so
+  # `git add -A` can't stage it). The implementer's own teardown trap can't fire on the
+  # normal path (it exec's into opencode), so clear the tree here. Best-effort.
+  rm -rf "$RUN_DIR/xdg" >/dev/null 2>&1 || true
 }
 trap 'stop_active' EXIT
 trap 'printf "\n→ driver: interrupted — stopping the active sweep…\n"; exit 130' INT TERM
