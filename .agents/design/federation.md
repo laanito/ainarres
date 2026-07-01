@@ -71,9 +71,10 @@ rather than shrinking it: M19 federates the **peers**; v5 federates the **privil
 participated in an AINARRES run — a deliberate M14 property (the *orchestrator* stays out
 of the loop) that we now distinguish from *the model never being a peer*. Cross-maker
 (Anthropic × xAI) is the strongest federation signal and the highest-variety pairing.
-Because family identity is `harness+model`, we can **split model by role**:
-`claude-code+opus` for design judgment, `claude-code+sonnet` for review — two families,
-more variety, cheaper. Build: a **headless `claude` poller** (`loop/claude-frontier.sh`,
+Because family identity is `harness+model`, we **split model by role into two distinct
+families** — `claude-code+opus` for design judgment, `claude-code+sonnet` for review —
+the same split we already run with `opencode+zen` and `opencode+qwen`: more variety,
+cheaper on the lighter role. Build: a **headless `claude` poller** (`loop/claude-frontier.sh`,
 the `grok-frontier.sh` analog — `claude -p` print mode, minting a token per sweep, running
 the claim→act→advance role loop). `capability:integrate` is **withheld**; the poller is a
 co-equal *standing poller*, owner-invoked, that only self-claims and advances — it never
@@ -91,23 +92,19 @@ whoever is free claim, and use the **M16 report** to observe how often review ac
 crossed families. Diversity most of the time; resilience always. The report *measures*
 the property; the substrate never *blocks* on it.
 
-**D4 — Create-vs-advance (the v3 freelance-creation concern).** The plan's M19 done-test
-asks that "who may decompose vs. who may only advance" hold by capability, not by prompt.
-On inspection this is smaller than it looks. Duplicate decomposition is already prevented
-*structurally*: the driver invokes decomposition **once** per run (M14), and `SKIP
-LOCKED` gives a `proposed` brief to exactly one designer — pollers thereafter only
-claim/advance. The only residual is a poller calling `create_task` off-script mid-run;
-`create_task` today is gated by lane membership alone, so any dev-lane family could. Two
-ways to close it, **owner's call at review**:
-- **(recommended, minimal) Gate `create_task` on `role:designer`** — a tiny migration
-  (change the create gate from `lane:dev` to `lane:dev` + `role:designer`). Correct
-  regardless of federation: only designers decompose; cheap implementers (no
-  `role:designer`) then *cannot* freelance-create. Satisfies the done-test by capability.
-- **(defer) Accept the structural backstops** (once-only decomposition + single
-  integrator gating what reaches `main`) as sufficient for M19 and leave a hard
-  create/propose capability to v5 governance.
-
-This is the *one* place M19 might touch the substrate; everything else is harness-side.
+**D4 — Create-vs-advance (the v3 freelance-creation concern): DECIDED — gate
+`create_task` on `role:designer` now.** The plan's M19 done-test asks that "who may
+decompose vs. who may only advance" hold by capability, not by prompt. Duplicate
+decomposition is already prevented *structurally* — the driver invokes decomposition
+**once** per run (M14), and `SKIP LOCKED` gives a `proposed` brief to exactly one designer,
+so pollers thereafter only claim/advance — but the residual is real: `create_task` today
+is gated by lane membership alone, so any dev-lane family (a cheap implementer, a stray
+peer) could freelance-create off-script mid-run. We close it **by capability**: a tiny
+migration changing the create gate from `lane:dev` to `lane:dev` + `role:designer`.
+Correct regardless of federation — only designers decompose; families without
+`role:designer` then *cannot* freelance-create — and it satisfies the done-test by
+capability, not prompt. This is the *one* place M19 touches the substrate; everything
+else is harness-side.
 
 **D5 — The integrator boundary is untouched.** `grok+grok-build` remains the sole holder
 of `role:integrator` + `capability:integrate`, owner-invoked, single (the merge queue of
@@ -143,25 +140,28 @@ M16 timeline (D3's measurement is the judge):
 Wall-clock is explicitly **not** a criterion (ADR 0021 § Amendment): the point is
 uncorrelated judgment, not speed.
 
-## Scope: harness-side, with at most one tiny substrate gate
+## Scope: harness-side, plus one tiny substrate gate (D4)
 
 - **Harness/driver/config:** the `claude` poller, `roles.sh` peer entries, the
-  `role:reviewer` grant to the claude family (designer already seeded), concurrent
-  frontier-poller launch. No schema.
-- **Substrate (only if D4-recommended is chosen):** a one-line-of-intent migration gating
-  `create_task` on `role:designer`, with a down that restores lane-only. plpgsql/plain-SQL
+  `role:reviewer` grant to `claude-code+opus`, the `role:designer` + `role:reviewer`
+  grants across the two claude families, concurrent frontier-poller launch. No schema.
+- **Substrate (D4, decided):** a small migration gating `create_task` on `role:designer`
+  (from `lane:dev` to `lane:dev` + `role:designer`), with a down that restores lane-only.
+  plpgsql/plain-SQL
   ([ADR 0005](../decisions/0005-logic-language-escalation.md)/[0010](../decisions/0010-environment-migrations-testing.md)).
 - **Observability (M16 extension):** per-role **family** attribution in the report — the
   slice that makes the gate judgeable and cross-family review measurable.
 
 ## Slicing (build order within M19)
 
-- **Slice A — the claude peer (assisted + deterministic mock).** `claude-frontier.sh`,
-  `roles.sh` entry, the `role:reviewer` grant, concurrent frontier launch; and, if chosen,
-  the D4 create gate. Touches the loop cast and (maybe) the seed → must be trustworthy
-  before a real run, exactly as M18 slices 1–2 were built assisted. Verify via the mock
-  that two frontier-role families are co-eligible and `SKIP LOCKED` distributes design/
-  review claims across families.
+- **Slice A — the claude peer + the D4 gate (assisted + deterministic mock).**
+  `claude-frontier.sh`, `roles.sh` entries for the two claude families, the
+  `role:designer`/`role:reviewer` grants, concurrent frontier launch, and the D4
+  `create_task` gate migration. Touches the loop cast, the seed, and one migration → must
+  be trustworthy before a real run, exactly as M18 slices 1–2 were built assisted. Verify
+  via the mock that two frontier-role families are co-eligible, that `SKIP LOCKED`
+  distributes design/review claims across families, and that a non-designer family is
+  refused `create_task`.
 - **Slice B — federation observability (swarm-built).** Extend the M16 report /
   `api.timeline` consumption to attribute per-role family and flag cross-family review.
   Non-safety, self-contained — a clean task for the swarm to build on the parallel loop.
