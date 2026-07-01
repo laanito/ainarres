@@ -1,0 +1,67 @@
+Extend the AINARRES end-of-run report so it attributes each shipped task's stages to the
+AGENT FAMILY that performed them, and summarizes CROSS-FAMILY REVIEW. This is the M19
+federation observability slice: it turns the report into the instrument that makes a
+federated run judgeable — "a claude reviewer verified grok/opencode-authored work" must
+be visible, not inferred (design/federation.md, Slice B).
+
+NOTE — this brief is SINGLE-USE: the run ships its task(s) to `main`, so a re-run needs a
+fresh brief whose work isn't already on main.
+
+WHAT EXISTS TODAY (read before designing):
+- `formatReport({ board, timeline }, { lane })` in bin/ainarres.mjs is a PURE function
+  (no I/O, no clock). It already prints: shipped (with PR refs), failed/blocked,
+  escalations, and "activity by family" (per-family EVENT COUNTS).
+- Each `timeline` row carries: task_id, type ('transition'|'claimed'|'created'|
+  'progress'|'escalated'), family (the acting agent's harness+model, may be null for
+  human/system), actor, created_at, and data. For a 'transition' event, data carries
+  { from, to, kind, note, ... }. So "who performed stage S→T on task X" is:
+  the `family` of the transition event whose data.from=S and data.to=T for task X.
+- The dev workflow stages: proposed→designing→implementing→reviewing→integrating→
+  validating→done. So per task: implemented-by = family of implementing→reviewing;
+  reviewed-by = family of reviewing→integrating; integrated-by = family of
+  integrating→validating; designed-by = family of proposed→designing.
+- Tests for formatReport live in test/status-format.test.ts (pure, substrate-free).
+
+DESIGNER — this is a COHESIVE change to ONE pure function plus its test, NOT a parallel
+fan-out (both changes touch bin/ainarres.mjs::formatReport and test/status-format.test.ts,
+so independent parallel tasks would collide). Decompose into a SINGLE task, or at most
+two DEPENDENT tasks (attribution first, then the cross-family summary) linked with
+--depends-on. Do not invent stages or new files beyond what's specified.
+
+THE FEATURE (extend formatReport; keep it pure — derive everything from the passed
+board + timeline, no new I/O):
+
+1. Per-shipped-task attribution. For each task in `shipped`, after its existing line, add
+   an indented attribution derived from that task's transition events:
+     "      by family: implemented=<fam> reviewed=<fam> integrated=<fam>"
+   Use the family of the corresponding transition (implementing→reviewing,
+   reviewing→integrating, integrating→validating). If a stage's transition isn't found in
+   the timeline, show "—" for that slot. Never throw on missing/partial data.
+
+2. Cross-family review summary. After the shipped list, add one line:
+     "cross-family review: N/M shipped tasks reviewed by a different family than implemented"
+   where M = shipped count with BOTH an implemented-by and reviewed-by family known, and
+   N = those where reviewed-by != implemented-by. This is the federation signal (a claude
+   reviewer catching what a grok/opencode author missed). If M = 0, print
+     "cross-family review: n/a (no reviewed tasks)".
+
+3. OPTIONAL, non-blocking (do NOT invent data): IF — and only if — timeline events already
+   carry a numeric token count in data (e.g. data.tokens), also print per-family token
+   totals. If no such field is present, OMIT this silently and do not fabricate it. This
+   must not block the task; skip it if absent.
+
+ACCEPTANCE (assert in test/status-format.test.ts, and the new assertions must FAIL on
+current main):
+- Given a timeline where task T1 is implemented-by opencode+big-pickle and reviewed-by
+  claude-code+sonnet, formatReport's output contains T1's "by family:" line naming both,
+  and the cross-family line counts T1 as cross-family (reviewed-by != implemented-by).
+- Given a task reviewed-by the SAME family that implemented it, it is NOT counted as
+  cross-family.
+- A shipped task with no reviewing transition in the timeline shows reviewed=— and does
+  not crash.
+
+VALIDATE (substrate-free — the pure formatter over in-memory fixtures):
+  npx vitest run test/status-format.test.ts
+
+Keep formatReport pure and total (never throws on partial timelines — a real run can be
+truncated). Do not touch the substrate, the views, or any other command.
