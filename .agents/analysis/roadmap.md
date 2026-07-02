@@ -18,10 +18,13 @@ Each version has removed one human touch-point:
 | v3 hands-off loop | "babysit the running pipeline" |
 | v4 swarm + federation | "run one worker at a time / one maker" |
 | **v5 governance** (in progress) | "judge each family by hand" |
-| **v6 candidate — the standing service** | "feed the brief · start & watch the machine · sit at the terminal" |
+| **v6 candidate — seat the bookends** | "hand-craft the brief (intaker) · hand-check delivery & health (auditor)" |
+| **v7 candidate — the standing service** | "start & watch the machine · sit at the terminal" |
 
-v5 is the safety prerequisite for v6: an always-on service is only *responsible* once the
-substrate can self-correct without someone watching every run.
+**Roles before runtime.** v6 seats the two out-of-loop roles *by hand first* — additive
+grants, no topology change, no new attack surface: safe foundations. **v7's always-on
+service is only *responsible* once v5 lets the substrate self-correct AND v6 has named +
+proven the roles** it will then run unattended and expose to the outside.
 
 ## The role model, and the two seats the orchestrator still holds
 
@@ -38,35 +41,55 @@ The pipeline of roles, as a **Customer → Consultant → Analyst → … → Au
 **Intaker and auditor are the two out-of-loop bookends the orchestrator (human) still occupies
 by hand** — every hand-written brief is an intaker act; every "did this run actually meet the
 ask?" is an auditor act. They pair: **the intaker's crystallized request is the contract the
-auditor audits against.** v5 names the auditor (quality facet); v6 names the intaker and grows
-the auditor's operational facet. Both are **human-held first, federatable later** (the M19 move
-applied to intake/audit — deferred).
+auditor audits against.** v5 names the auditor (quality facet); **v6 names the intaker and
+grows the auditor's operational facet** (health/integrity); **v7 gives both roles their
+*channel* (API) and *standing runtime* (service).** All **human-held first, federatable
+later** (the M19 move applied to intake/audit — deferred).
 
-## v6 candidate — "the standing service"
+## v6 candidate — "seat the bookends" (the roles, out-of-loop, human-held-first)
 
-Turn AINARRES from an **owner-run batch tool** into a **standing service you talk to**:
-self-fed (intaker), self-watched (auditor-ops), always-on (loop-as-service), reachable
-(API/UI). Four coherent themes, not four separate features.
+Make the two out-of-loop functions the orchestrator holds by hand into **first-class roles**.
+**Additive grants, no topology change, no new attack surface** — baby steps, safe foundations.
+Briefs still arrive the *existing* way (the owner feeds the loop); v6 is about the *roles*, not
+the *channel* or the *runtime* (those are v7). Both roles are **human/orchestrator-held first**,
+federatable later.
 
-### Themes
-
-1. **Intaker (Consultant) + intake channel.** The intaker is a *reasoning/translation* role
-   (request → brief), distinct from the *channel* that carries the customer's words (API/web).
-   It is **inherently interactive** (back-and-forth to pin the request down) — which is exactly
-   why it pairs with the UI: the UI's write side *is* the Customer↔Intaker conversation.
+1. **Intaker (Consultant).** A *reasoning/translation* role: raw request → well-formed **brief**
+   for the designer (Analyst). Distinct from any *channel* — this is the cognition, not a pipe.
+   Inherently **interactive** (back-and-forth to pin the request down). It's what the orchestrator
+   does every time it hand-writes a brief.
    - *Decision to settle:* **two-tier creation vs the D4 gate.** D4 ([federation.md](../design/federation.md))
      gated `create_task` on the starter role (`role:designer`). Intake adds a second legitimate
      creator: **`role:intaker` creates the request-root (`proposed` brief); `role:designer`
      creates the decomposition.** Two creators, two levels.
 
-2. **Auditor — operational facet.** Beyond v5's quality/governance duty, a *standing* service
-   needs the auditor watching **pipeline health** (stalls, stranded claims, backpressure),
-   **repo integrity** (coherent `main`, no orphaned worktrees / [loop-board-pollution]-style
-   contamination), and **integration spot-checks**. Framing: the auditor is the *agent
-   embodiment of the existing `oversight` role* — an automated overseer beside the human one,
-   sharing its read surface + intervention RPCs (not a new privilege).
+2. **Auditor — operational facet** (grows v5's quality naming). v5's M22 names the auditor for
+   *delivery-vs-request-and-design*; v6 adds the **out-of-loop operational watch**: **pipeline
+   health** (stalls, stranded claims, backpressure), **repo integrity** (coherent `main`, no
+   orphaned worktrees / [loop-board-pollution]-style contamination), and **integration
+   spot-checks**. Framing: the auditor is the *agent embodiment of the existing `oversight`
+   role* — an automated overseer beside the human one, sharing its read surface + intervention
+   RPCs (not a new privilege).
 
-3. **`make loop` → service (always-on supervisor, 1..n children).** The topology flip v4/v5
+**Why v6 is the safe-foundations step:** both are additive role grants exercised on the
+*existing* owner-fed, batch loop — no always-on daemon, no external ingress, nothing that
+changes the termination property or the attack surface. It simply seats (and lets us *prove*,
+by hand) the two roles that v7 will later run unattended and expose.
+
+## v7 candidate — "the standing service" (API + always-on; the risky flip, done last)
+
+Give the v6 roles a **channel** (API) and a **standing runtime** (always-on service): AINARRES
+from an **owner-run batch tool** to a **standing service you talk to**. **Prerequisites: v5
+governance** (self-correction so it's safe unattended) **and v6** (the intaker/auditor roles
+named and proven by hand). This is where the real risk lives — hence last.
+
+1. **API → UI (API first).** **PostgREST already is the HTTP+JWT API** — verbs + M16 views are
+   exposed, so the *read* API for a UI (board / timeline / report as JSON) is nearly free. The
+   new work is: **intake endpoints** (the intaker's write *channel* — the UI's write side *is*
+   the Customer↔Intaker conversation), **human/external auth** (distinct from the `agent` role),
+   and read shapes for a UI. UI last, cheap once the API is shaped.
+
+2. **`make loop` → service (always-on supervisor, 1..n children).** The topology flip v4/v5
    deferred ("always-on daemons — later"). **Evolution of `driver.sh` + [ADR 0020](../decisions/0020-autonomous-run-topology.md),
    not a rewrite** — the spawning machinery exists (`run_pool`, `run_concurrent`,
    `roles.sh::harness_sweep`). A supervisor watches the board and spawns the right family when
@@ -77,30 +100,19 @@ self-fed (intaker), self-watched (auditor-ops), always-on (loop-as-service), rea
      X → ensure capacity for group X"), **never a router** that decides what work or who does
      it — the substrate still routes via `SKIP LOCKED`. If it ever picks which task goes to
      whom, we've regrown an orchestrator.
-   - *Synergy with v5:* the supervisor **consumes governance** — don't spawn a family that's
-     temp-banned from the capability it's needed for.
+   - *Synergy with v5/v6:* the supervisor **consumes governance** (don't spawn a temp-banned
+     family) and leans on the **operational auditor** (v6) for the health it can't babysit.
 
-4. **API → UI (API first).** **PostgREST already is the HTTP+JWT API** — verbs + M16 views are
-   exposed, so the *read* API for a UI (board / timeline / report as JSON) is nearly free. The
-   new work is: **intake endpoints** (the intaker's write channel), **human/external auth**
-   (distinct from the `agent` role), and read shapes for a UI. UI last, cheap once the API is
-   shaped. The intake write-side and the UI front are **one surface**.
+**Suggested sequencing (within v7):**
+`API + intake channel  →  the service (always-on)  →  UI`
 
-### Suggested sequencing (within v6)
+**Cross-cutting — a security-posture ADR up front (gate for v7).** **External ingress + standing
+egress (integrator) + always-on** is qualitatively a new posture: a system acting on outside
+input continuously. It deserves its own **threat-model ADR at the start of v7**, not a retrofit.
+(The intaker's *channel* is the inbound counterpart to the integrator's guarded egress — auth /
+validate / sanitize *before* input becomes a row.)
 
-`API + intake  →  the service (always-on, consuming governance + auditor-ops)  →  UI`
-
-Lowest-risk front door first (also forces the D4/ingress decisions early); the risky always-on
-flip second, once governance + health make it safe; the UI last, on a shaped API.
-
-### Cross-cutting — a security-posture ADR up front (gate for v6)
-
-**External ingress + standing egress (integrator) + always-on** is qualitatively a new posture:
-a system acting on outside input continuously. It deserves its own **threat-model ADR at the
-start of v6**, not a retrofit. (The intaker is the inbound counterpart to the integrator's
-guarded egress — auth / validate / sanitize *before* input becomes a row.)
-
-## v7+ gestures (even rougher)
+## v8+ gestures (even rougher)
 
 Pulled from the standing deferred lists ([0021](../decisions/0021-v4-scope-the-swarm.md) §
 out-of-scope, [0022](../decisions/0022-v5-scope-governance.md) § deferred):
@@ -117,5 +129,5 @@ out-of-scope, [0022](../decisions/0022-v5-scope-governance.md) § deferred):
 
 ## Next action
 
-Land **v5 M20–M22** first. Return here to promote the v6 candidate into a scope ADR + plan
-when v5 is done.
+Land **v5 M20–M22** first. Return here to promote the **v6** candidate (intaker + auditor
+roles) into a scope ADR + plan when v5 is done; **v7** (API + service) follows on top of v6.
