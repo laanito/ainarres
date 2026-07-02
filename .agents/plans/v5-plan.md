@@ -65,22 +65,25 @@ and permanent bans reach a human.
 decision can stand on. ([ADR 0022](../decisions/0022-v5-scope-governance.md))
 
 **Steps**
-- **Capture cost** — stamp `total_cost_usd` + token counts from each harness result (already
-  present in `loop/run/*.log`) into `events.data`; aggregate per family. The
-  [[idea-token-spend-metric]] signal, finally recorded.
+- **Capture token spend** — stamp per-model **token counts** from each harness result (already
+  present in `loop/run/*.log`) into `events.data`; aggregate per family. **Tokens, not USD** —
+  USD is meaningless for local/free models and is a UI-level translation ([design](../design/track-record.md) D3).
+  The [[idea-token-spend-metric]] signal, finally recorded.
 - **Track-record view** — a read-only view scoring each `(family, capability)`: reject rate,
   vacuous/empty-diff rate, validation pass/fail, cross-family review outcomes (reusing M19's
-  `familyOfTransition`), cost-per-shipped-task. Attribution credits the **producing** family
+  `familyOfTransition`), tokens-per-shipped-task. Attribution credits the **producing** family
   (who advanced *into* the stage that later bounced).
 - **Report line** — the end-of-run report surfaces the track record (who's trending toward a
-  ban, who's expensive-but-fine — kept distinct: cost ≠ incompetence).
+  ban, who's token-heavy-but-fine — kept distinct: spend ≠ incompetence).
 
 **Done-tests**
-- After a run, `events.data` carries per-step cost/tokens attributed to the acting family.
-- The view reports reject/validation/cross-family/cost per `(family, capability)`, matching a
-  hand-audit of the timeline; a family that never worked a capability shows no phantom score.
-- Cost and failure are reported as **separate** signals (an expensive-but-passing family is
-  not flagged for governance).
+- After a run, `events.data` carries per-step **token counts** (no USD) attributed to the
+  acting family.
+- The view reports reject/validation/cross-family/**tokens** per `(family, capability)`,
+  matching a hand-audit of the timeline; a family that never worked a capability shows no
+  phantom score.
+- Token spend and failure are reported as **separate** signals (a token-heavy-but-passing
+  family is not flagged for governance).
 
 **Blog:** "A track record per family: the signal before the sentence."
 
@@ -168,8 +171,9 @@ integrator), and route the failures a rule shouldn't decide to a human, cleanly.
 - **Automated / federated auditing** — an agent-judge scoring delivery-vs-request-and-design,
   and *federating* the auditor across makers (the M19 move applied to audit); catching
   rubber-stamp reviewers (a reviewer track record: who approves work that later bounces).
-- **Cost-aware routing** — using the M20 cost signal to *pick* a family per task
-  ([[idea-token-spend-metric]]); v5 measures, v6 routes.
+- **Cost-aware routing** — using the M20 **token** signal to *pick* a family per task
+  ([[idea-token-spend-metric]]); v5 measures tokens, the router prices them (USD, if wanted,
+  at that layer / the UI).
 - **Cross-substrate / cross-org sybil & attestation** — family identity beyond one
   substrate.
 - **Always-on daemons / horizontal scale** — unchanged; still owner-started, single instance.

@@ -167,9 +167,10 @@ Read from the M16 timeline + the family track-record view:
   ledger; `effective_features()` filters expired denials; `reject_task` inserts a temporary,
   backoff-scaled denial on threshold; threshold/backoff resolution. plpgsql / plain-SQL
   up+down ([ADR 0005](../decisions/0005-logic-language-escalation.md)/[0010](../decisions/0010-environment-migrations-testing.md)).
-- **Signal (M20, swarm):** capture `total_cost_usd` + tokens from the harness result into
-  `events.data`; the per-family, per-capability track-record view (rejects, verdicts,
-  validation, cross-family review, cost-per-shipped-task).
+- **Signal (M20, swarm):** capture **token counts** from the harness result into
+  `events.data` (**tokens, not USD** — USD is a UI-level translation, [track-record.md](track-record.md) D3);
+  the per-family, per-capability track-record view (rejects, verdicts, validation, cross-family
+  review, tokens-per-shipped-task).
 - **Surface (M22):** the escalation view + report line (qualitative failures, pending
   permanent-ban signals); an owner RPC to make a ban permanent / lift one.
 
@@ -198,10 +199,10 @@ Read from the M16 timeline + the family track-record view:
   This is *intended* (it surfaces to a human) but must be **loud** — the report and
   oversight view have to make "integration halted by governance" unmistakable, not a silent
   stall that reads like the M18 backpressure we already know.
-- **Cost-aware routing is deferred.** v5 *measures* token spend; a family that is merely
-  *expensive* (not failing) is **not** governed — expense feeds the future router
-  ([[idea-token-spend-metric]]), not a ban. Guard against conflating cost with
-  incompetence.
+- **Cost-aware routing is deferred.** v5 *measures* token spend (tokens, not USD); a family
+  that is merely *token-heavy* (not failing) is **not** governed — spend feeds the future
+  router ([[idea-token-spend-metric]]), not a ban, and any USD pricing lives at that layer.
+  Guard against conflating spend with incompetence.
 - **The qualitative path is a stub.** "Raise to a human" is honest but manual; until v6
   gives it structure, a swamped human is the bottleneck for design-quality failures. Named,
   accepted for the first iteration.

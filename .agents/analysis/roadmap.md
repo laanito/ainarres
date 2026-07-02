@@ -119,8 +119,9 @@ out-of-scope, [0022](../decisions/0022-v5-scope-governance.md) § deferred):
 
 - **Federated intaker / auditor** — frontier families doing requirements elicitation and
   cross-maker delivery audit (the M19 move applied to the two bookends).
-- **Cost-aware routing** — use v5's captured token/cost signal to *pick* a family per task
-  ([idea-token-spend-metric]); v5 measures, this routes.
+- **Cost-aware routing** — use v5's captured **token** signal to *pick* a family per task
+  ([idea-token-spend-metric]); v5 measures tokens, this routes (and is the layer that prices
+  tokens in USD, if ever — the substrate never does).
 - **Automated qualitative judgment** — an agent-judge for design quality / catching
   rubber-stamp reviewers (a reviewer track record).
 - **Cross-substrate / cross-org federation + sybil attestation** — peers and identity beyond

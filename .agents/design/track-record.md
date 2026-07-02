@@ -23,14 +23,15 @@ Two facts shape the milestone:
   `data` carries `{kind, from, to, reason, effects}` — `kind` **is** the verdict, `reason`
   **is** the reject reason — and `actor` is server-stamped from the JWT `sub`, joined to a
   family by `api.timeline`. M20 does not enrich the verbs; it **aggregates** what's there.
-- **The cost signal is emitted but discarded.** Every headless harness result carries
-  `total_cost_usd` + per-model token counts (in `loop/run/*.log`). It never reaches the
-  substrate. M20 captures it — the [[idea-token-spend-metric]], finally recorded.
+- **The spend signal is emitted but discarded.** Every headless harness result carries
+  per-model **token counts** (in `loop/run/*.log`). It never reaches the substrate. M20
+  captures the **tokens** — the [[idea-token-spend-metric]], finally recorded. (The harness
+  also emits a `total_cost_usd`; we deliberately **do not** store it — see D3.)
 
 **The output** ([ADR 0022](../decisions/0022-v5-scope-governance.md)): a read-only,
 per-`(family, capability)` scored record — reject rate, validation outcomes, cross-family
-review, **and cost as its own separate signal** — that a hand-audit of the timeline confirms,
-and that M21's ban rule can read in-DB. No consequence, this milestone.
+review, **and token spend as its own separate signal** — that a hand-audit of the timeline
+confirms, and that M21's ban rule can read in-DB. No consequence, this milestone.
 
 ## What changes: one write path, one view — no verb rewrites
 
@@ -40,26 +41,28 @@ write is stamping it.
 
 ```
 competence:  app.events (type='transition', already attributable) ──▶ aggregate  ──┐
-cost:        harness JSON (total_cost_usd, tokens, in run/*.log)                   ├─▶ api.family_track_record
-             └─ driver parses post-sweep ─▶ app.record_usage() ─▶ events(type='usage') ─┘   (read-only view)
+tokens:      harness JSON (per-model token counts, in run/*.log)                   ├─▶ api.family_track_record
+             └─ driver parses post-sweep ─▶ app.record_usage() ─▶ events(type='usage') ─┘   (read-only view, tokens only)
                                                                                        ──▶ end-of-run report reads the view
+                                                                       (USD, if ever wanted, is a UI-level translation — never in the substrate)
 ```
 
 ## Decisions (the open questions, settled)
 
-**D1 — Cost is captured driver-side and written by a privileged verb — never self-reported by
-the agent.** The `exec` model forces this: every poller (`grok-frontier.sh`,
+**D1 — Token spend is captured driver-side and written by a privileged verb — never
+self-reported by the agent.** The `exec` model forces this: every poller (`grok-frontier.sh`,
 `opencode-implementer.sh`, `claude-frontier.sh`) `exec`s into its tool, so the process is
-*replaced* and the result JSON (with `total_cost_usd`) only exists **after** it exits, captured
+*replaced* and the result JSON (with the token counts) only exists **after** it exits, captured
 by the driver into `$RUN_DIR/*.log`. The agent literally cannot call a verb to report its own
-cost — it's gone by the time the number is known. So the **driver** parses the sweep log and
+usage — it's gone by the time the number is known. So the **driver** parses the sweep log and
 calls a privileged `app.record_usage(p_actor, p_task, p_data)` that inserts a `type='usage'`
-event (`data = {cost_usd, tokens, model, sweep_id}`). Attribution stays honest: `p_actor` is
-the real `sub` the driver minted, so `actor→agents→agent_families` yields the true family —
-the driver *asserts* the number, but the *family* is unforgeable exactly as every other event.
-The verb is granted to a privileged role (the driver already mints an `OVERSIGHT_TOKEN` and can
-mint `admin`/`reaper`); it is **append-only usage data with no capability effect** — a modest
-write, not a governance action.
+event (`data = {tokens: {input, output, cache_read, cache_creation}, model, sweep_id}` —
+**tokens and model, no USD**). Attribution stays honest: `p_actor` is the real `sub` the driver
+minted, so `actor→agents→agent_families` yields the true family — the driver *asserts* the
+number, but the *family* is unforgeable exactly as every other event. The verb is granted to a
+privileged role (the driver already mints an `OVERSIGHT_TOKEN` and can mint `admin`/`reaper`);
+it is **append-only usage data with no capability effect** — a modest write, not a governance
+action.
 
 **D2 — The track record is a SQL view (`api.family_track_record`), not JS in the report.** M16
 and M19 put family attribution in `bin/ainarres.mjs` (`familyOfTransition`) because the
@@ -69,12 +72,22 @@ did in JS ("who advanced task X from `from`→`to`") is expressible in SQL over 
 (the transition event's `actor`). The report then just *reads the view* (simpler JS); M21
 reads the same view. One source of truth for the record, in the plane that needs it.
 
-**D3 — Cost and competence are SEPARATE columns; the view never blends them.** The ADR 0022
-invariant: *"a family that is merely expensive (not failing) is not governed."* The view
-surfaces cost (`total_cost_usd`, `cost_per_shipped_task`) in its own columns, beside — never
-folded into — the competence columns (reject rate, validation, cross-family). An
-expensive-but-passing family reads as *expensive*, never as *failing*. Blending them would let
-M21 ban a family for being pricey, which is a **routing** decision (v7+), not a governance one.
+**D3 — The substrate records TOKENS, not USD; and token spend is a SEPARATE signal from
+competence.** Two distinct points:
+
+- **Tokens, never dollars.** A `total_cost_usd` is *meaningless* for a local `ollama` worker or
+  a free-tier API, and even for a paid API the price map is deployment- and time-specific.
+  Tokens are the **primitive, universal fact**; USD is a *derived* view. By the two-plane
+  model ([ADR 0003](../decisions/0003-two-plane-source-of-truth.md)), the substrate stores the
+  primitive; **any USD translation happens at the UI level (v7), against a price map that lives
+  where the human reads it** — never baked into an append-only event that would then be wrong
+  for half the families and stale for the rest. The harness emits `total_cost_usd`; we drop it.
+- **Spend ≠ competence.** The ADR 0022 invariant: *"a family that is merely expensive (not
+  failing) is not governed."* Token-spend columns (`total_tokens`, `tokens_per_shipped_task`)
+  sit beside — never folded into — the competence columns (reject rate, validation,
+  cross-family). A token-heavy-but-passing family reads as *expensive*, never as *failing*.
+  Blending them would let M21 ban a family for burning tokens, which is a **routing** decision
+  (v7+, and *that* is the layer that may price tokens in USD), not a governance one.
 
 **D4 — A failure credits the PRODUCING family, per `(family, capability)`.** A reject is called
 by a reviewer/integrator, but the family being judged is the **producer** whose work bounced —
@@ -103,8 +116,8 @@ window or a threshold. Measure now; judge in M21.
   `(family, capability)`:
   - *competence:* deliveries, rejects, `reject_rate`, validation pass/fail, cross-family-review
     outcomes (from `type='transition'` events, producing-family attribution).
-  - *cost (separate):* `total_cost_usd`, `total_tokens`, `cost_per_shipped_task` (from
-    `type='usage'` events).
+  - *token spend (separate, tokens only):* `total_tokens`, `tokens_per_shipped_task` (from
+    `type='usage'` events). **No USD** — see D3.
   - the timestamps M21 needs to apply a window.
 
 ## Scope: one privileged write verb, one view, driver wiring, a report line
@@ -112,9 +125,10 @@ window or a threshold. Measure now; judge in M21.
 - **Substrate:** `app.record_usage` verb + grant; `api.family_track_record` view. One
   migration, plain-SQL/plpgsql up+down
   ([ADR 0005](../decisions/0005-logic-language-escalation.md)/[0010](../decisions/0010-environment-migrations-testing.md)).
-- **Harness/driver:** after each sweep, parse `total_cost_usd`/tokens from `$RUN_DIR/*.log`
+- **Harness/driver:** after each sweep, parse the **token counts** from `$RUN_DIR/*.log`
   (per family — the JSON shapes differ across opencode/grok/claude; unknown → **null, not
-  zero**, so a family never looks free) and call `record_usage`.
+  zero**, so a family never looks free) and call `record_usage`. The `total_cost_usd` field is
+  ignored.
 - **Observability (M16 extension):** the end-of-run report reads `api.family_track_record` and
   prints the per-`(family, capability)` record, cost in its own column.
 
@@ -130,14 +144,15 @@ window or a threshold. Measure now; judge in M21.
 
 ## Open risks (honest)
 
-- **Harness cost-shape heterogeneity.** opencode, grok, and claude emit usage differently; the
-  parser is per-family and will drift as tools change. Degrade to **null cost** (never zero) on
-  an unrecognized shape, and `log()` the miss — an unparsed cost must look *unknown*, not
-  *free*, or a family could dodge the future router by emitting cost we can't read.
+- **Harness token-shape heterogeneity.** opencode, grok, and claude report token counts
+  differently; the parser is per-family and will drift as tools change. Degrade to **null
+  tokens** (never zero) on an unrecognized shape, and `log()` the miss — unparsed usage must
+  look *unknown*, not *free*, or a family could dodge the future router by emitting counts we
+  can't read.
 - **Task attribution when a sweep touches several tasks.** A frontier sweep can advance more
-  than one task; charging its whole cost to the last one is a coarse approximation. Acceptable
-  for M20 (cost is a *separate*, not-yet-acted-on signal); refine if per-task cost drives
-  routing later.
+  than one task; charging its whole token spend to the last one is a coarse approximation.
+  Acceptable for M20 (token spend is a *separate*, not-yet-acted-on signal); refine if
+  per-task spend drives routing later.
 - **Bad-rejection false strikes (carried to M21).** D4 credits the producer of a rejected
   stage, but a reject can be the *reviewer's* fault — wrongly striking the producer. M20 only
   *records*; the mis-attribution bites at M21, where the human/hard path (auditor) is the
