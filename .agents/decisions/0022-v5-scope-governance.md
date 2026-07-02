@@ -27,9 +27,11 @@ Two facts sharpen what v5 is — and is **not** — a build of:
   `{revoke:[…]}` to a family. Revoking a capability is a *solved primitive*. v5 does not
   build revocation; it builds the **signal**, the **policy**, and the **safety envelope**
   around pulling that trigger.
-- **The cost signal is already emitted, unused.** Every headless harness result line
-  carries `total_cost_usd` + per-model token counts (visible in `loop/run/*.log`). v5
-  captures it into `events.data` rather than discarding it.
+- **The spend signal is already emitted, unused.** Every headless harness result line
+  carries per-model **token counts** (visible in `loop/run/*.log`). v5 captures the **tokens**
+  into `events.data` rather than discarding them. (The harness also emits `total_cost_usd`; the
+  substrate deliberately stores **tokens, not USD** — USD is meaningless for local/free models
+  and is a UI-level translation. See [design/track-record.md](../design/track-record.md) D3.)
 
 So v5 is small in *mechanism* and load-bearing in *judgment*: the substrate learns to
 **remove a capability from a family that has proven bad at it**, safely, mostly on its own.
@@ -106,7 +108,7 @@ temporarily, correctly — while a qualitative failure is escalated (not auto-ac
 ### In scope for v5
 
 - **Family track record** (M20) — aggregate M16's attributable outcomes (rejects,
-  verdicts, validation results, cross-family review) **plus captured token/cost** into a
+  verdicts, validation results, cross-family review) **plus captured token counts** into a
   per-family, per-capability scored view. Read-only; the signal governance consumes.
 - **Reflexive temporary revocation** (M21, the heart) — a substrate-side rule: crossing a
   family's reject threshold for a capability inserts a **temporary** `feature_denial` with
@@ -127,9 +129,10 @@ temporarily, correctly — while a qualitative failure is escalated (not auto-ac
 - **Automated / federated auditing.** The auditor is **human-held** this version; an
   agent-judge scoring delivery-vs-request-and-design — and *federating* the auditor across
   makers (the M19 move applied to audit) — is v6+.
-- **Cost-aware *routing*.** v5 *captures and scores* token spend; *using* it to pick which
-  family gets a task (the [[idea-token-spend-metric]] router) is a follow-on — measure
-  first, route later, same discipline as M19's measure-not-enforce.
+- **Cost-aware *routing*.** v5 *captures and scores* token spend (**tokens, not USD**); *using*
+  it to pick which family gets a task (the [[idea-token-spend-metric]] router) is a follow-on —
+  measure first, route later, same discipline as M19's measure-not-enforce. Any USD pricing
+  lives at that routing/UI layer, never in the substrate.
 - **Cross-substrate / cross-org sybil.** Family identity is `harness+model` on one
   substrate (see design note D2); attestation across substrates is later.
 - **Always-on daemons / horizontal scale** — unchanged from v4; still owner-started.
