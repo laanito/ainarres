@@ -91,7 +91,14 @@ decision can stand on. ([ADR 0022](../decisions/0022-v5-scope-governance.md))
 
 **Goal:** the substrate temp-bans a family that crosses a reject threshold at a capability —
 autonomously, with exponential backoff, self-healing — while permanent stays human.
-([ADR 0022](../decisions/0022-v5-scope-governance.md))
+([ADR 0022](../decisions/0022-v5-scope-governance.md); design settled in
+[`design/reflexive-revocation.md`](../design/reflexive-revocation.md))
+
+> **Build split** ([[feedback-swarm-vs-manual-split]]): **Slice A** (the reflexive core —
+> schema, `effective_features` expiry filter, the reject-threshold rule, seeded policy) is
+> **assisted + mock-verified** — a capability-stripping rule must be correct before it runs
+> live. **Slice B** (the loud governance oversight view + report line — banned / trending /
+> singleton-halted) is **swarm-eligible**: built from a brief the owner runs.
 
 **Steps**
 - **Temporal denial** — add `feature_denials.expires_at` (NULL = permanent); a persistent
@@ -159,9 +166,10 @@ integrator), and route the failures a rule shouldn't decide to a human, cleanly.
 
 - **M20:** exact score shape and window (rolling N runs vs. time window); keeping cost and
   competence provably separate; where the cost stamp is written (driver vs. verb).
-- **M21:** seed values for threshold + backoff base/cap; window semantics (consecutive vs.
-  within-window rejects); whether a lifted/expired ban's strike decays over time; making the
-  singleton-halt loud without false alarms.
+- **M21:** *settled in [`design/reflexive-revocation.md`](../design/reflexive-revocation.md)* —
+  seeds threshold=3 / base=1h / cap=24h (D5, as tunable data); a strike per attributable
+  reject, reset on ban, `ban_count` drives `base·2^ban_count` backoff (D3); no decay in v1
+  (D6); the singleton obeys the uniform rule with loudness in the surface, not the core (D7).
 - **M22:** the auditor's **placement** (new `audited` stage vs. out-of-band oversight audit);
   what precisely constitutes an auditor flag vs. a reviewer reject; the permanent-ban
   recommendation trigger; audit shape for human governance actions.
