@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { formatStatus, formatEvents, formatReport } from "../bin/ainarres.mjs";
+import { formatStatus, formatEvents, formatReport, fmtTokens } from "../bin/ainarres.mjs";
 
 // Pure unit test: no substrate, no network, no DB, no token. We import the
 // formatter directly from the CLI module — which must NOT run the CLI on import
@@ -305,5 +305,45 @@ describe("formatReport", () => {
     const out = formatReport({});
     expect(out).toContain("shipped (0):");
     expect(out).toContain("cross-family review: n/a (no reviewed tasks)");
+  });
+
+  // ── M20 track record section (competence · spend, kept separate) ─────────
+  test("renders the per-(family, capability) track record with spend as its own column", () => {
+    const trackRecord = [
+      {
+        family: "opencode+big-pickle", capability: "role:implementer",
+        delivered: 5, rejected: 2, cross_family_rejected: 2, reject_rate: 0.4,
+        total_tokens: null, tokens_per_delivery: null, // opencode emits no tokens → unknown
+      },
+      {
+        family: "claude-code+sonnet", capability: "role:reviewer",
+        delivered: 3, rejected: 0, cross_family_rejected: 0, reject_rate: 0,
+        total_tokens: 1_200_000, tokens_per_delivery: 400_000,
+      },
+    ];
+    const out = formatReport({ board: [], timeline: [], trackRecord });
+    expect(out).toContain("family track record");
+    // Competence + spend on one line; tokens UNKNOWN (not 0) for the unmeasured family.
+    expect(out).toContain("  - opencode+big-pickle / role:implementer: 5 delivered, 2 rejected (40%), 2 cross-family · tokens: unknown");
+    expect(out).toContain("  - claude-code+sonnet / role:reviewer: 3 delivered, 0 rejected (0%), 0 cross-family · tokens: 1.2M, 400.0k/delivery");
+    // The separation is stated in the report itself.
+    expect(out).toContain("expensive, not failing");
+  });
+
+  test("track record: no rows → placeholder; reject_rate null → n/a", () => {
+    expect(formatReport({}).match(/family track record[^\n]*\n\s+\(none\)/)).not.toBeNull();
+    const out = formatReport({ trackRecord: [{ family: "f", capability: "role:x", delivered: 0, rejected: 0, cross_family_rejected: 0, reject_rate: null, total_tokens: null }] });
+    expect(out).toContain("0 rejected (n/a)");
+  });
+});
+
+describe("fmtTokens", () => {
+  test("scales to k/M and reports null as unknown (never 0 — unknown ≠ free)", () => {
+    expect(fmtTokens(null)).toBe("unknown");
+    expect(fmtTokens(undefined)).toBe("unknown");
+    expect(fmtTokens(0)).toBe("0");
+    expect(fmtTokens(950)).toBe("950");
+    expect(fmtTokens(1234)).toBe("1.2k");
+    expect(fmtTokens(1_200_000)).toBe("1.2M");
   });
 });
