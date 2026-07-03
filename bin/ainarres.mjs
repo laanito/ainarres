@@ -351,6 +351,49 @@ export function secondsToExpiry(token, nowSeconds) {
   return claims.exp - nowSeconds;
 }
 
+// Extract per-model TOKEN counts from a harness sweep log (M20 Slice A,
+// design/track-record.md D1/D3). Pure and per-family: the harnesses report usage in
+// different shapes (D3 heterogeneity), so an UNKNOWN shape returns null — never
+// zeroes. That distinction is load-bearing: a family we cannot measure must read as
+// "unknown" (the track-record view LEFT JOINs → NULL), never as "free", or it could
+// dodge the future cost-aware router by emitting counts we can't read. Today only the
+// claude families emit a parseable shape; opencode and grok print no token JSON, so
+// they degrade to null by design. Tokens only — the harness's total_cost_usd is
+// deliberately dropped (USD is a UI-level translation — D3).
+export function parseUsage(logText, family) {
+  if (!family || !/^claude-code\+/.test(family)) return null; // only the claude shape is parseable today
+  // claude `--output-format json` prints compact JSON; the final result object has a
+  // top-level `usage` (snake_case token fields) and a per-model `modelUsage`. Scan
+  // lines, keep the LAST object carrying a numeric usage.input_tokens.
+  let best = null;
+  for (const line of logText.split("\n")) {
+    const t = line.trim();
+    if (!t.startsWith("{") || !t.includes('"usage"')) continue;
+    let obj;
+    try { obj = JSON.parse(t); } catch { continue; }
+    if (obj && obj.usage && typeof obj.usage.input_tokens === "number") best = obj;
+  }
+  if (!best) return null;
+  const u = best.usage;
+  const tokens = {
+    input: u.input_tokens ?? null,
+    output: u.output_tokens ?? null,
+    cache_read: u.cache_read_input_tokens ?? null,
+    cache_creation: u.cache_creation_input_tokens ?? null,
+  };
+  // model: the dominant modelUsage key by tokens — a human-readable label only (the
+  // FAMILY is the identity that matters for governance). Null if absent.
+  let model = null, max = -1;
+  const mu = best.modelUsage;
+  if (mu && typeof mu === "object") {
+    for (const [name, m] of Object.entries(mu)) {
+      const n = (m?.inputTokens ?? 0) + (m?.outputTokens ?? 0);
+      if (n > max) { max = n; model = name; }
+    }
+  }
+  return { tokens, model };
+}
+
 const COMMANDS = {
   // Mint an HS256 token locally (operator holds the secret; signing lives outside
   // the DB per M2). Features are explicit; this never reads the DB.
@@ -548,6 +591,41 @@ const COMMANDS = {
     }
     process.stdout.write(`${formatReport({ board: b.body, timeline: t.body }, { lane })}\n`);
   },
+
+  // record-usage — M20 Slice A: stamp a sweep's TOKEN spend onto the task the actor
+  // worked, as a `type='usage'` event (design/track-record.md D1). Driver-invoked with
+  // an oversight token (an agent token cannot call it — a family must not write its own
+  // scorecard). --from-log parses the sweep log per --family; --data passes a payload
+  // directly (tests/direct use). When no tokens can be parsed (unknown harness shape /
+  // a non-claude family today), it writes NOTHING and notes the miss on stderr — the
+  // track-record view then shows that family as unknown (NULL), never as free.
+  async "record-usage"(rest, values, token) {
+    if (!values.actor) fail("record-usage: --actor is required");
+    let payload;
+    if (values.data) {
+      payload = JSON.parse(values.data);
+    } else if (values["from-log"]) {
+      let text;
+      try {
+        text = readFileSync(values["from-log"], "utf8");
+      } catch (e) {
+        process.stderr.write(`record-usage: cannot read log ${values["from-log"]} (${e.message}) — recorded nothing\n`);
+        return;
+      }
+      const parsed = parseUsage(text, values.family);
+      if (!parsed) {
+        process.stderr.write(`record-usage: no parseable token counts for family '${values.family ?? "?"}' in ${values["from-log"]} — recorded nothing (family reads as unknown, not free)\n`);
+        return;
+      }
+      payload = { tokens: parsed.tokens, model: parsed.model };
+    } else {
+      fail("record-usage: need --from-log PATH (with --family) or --data JSON");
+    }
+    if (values.sweep) payload.sweep_id = values.sweep;
+    const body = { actor: values.actor, data: payload };
+    if (values.task) body.task = values.task;
+    return callVerb("record_usage", body, token);
+  },
 };
 
 // Options each verb/view command accepts (token is global).
@@ -569,6 +647,7 @@ const OPTS = {
   status: { lane: { type: "string" }, limit: { type: "string" }, watch: { type: "boolean" }, interval: { type: "string" }, token: { type: "string" } },
   events: { lane: { type: "string" }, task: { type: "string" }, family: { type: "string" }, type: { type: "string" }, limit: { type: "string" }, json: { type: "boolean" }, token: { type: "string" } },
   report: { lane: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
+  "record-usage": { actor: { type: "string" }, family: { type: "string" }, "from-log": { type: "string" }, data: { type: "string" }, sweep: { type: "string" }, task: { type: "string" }, token: { type: "string" } },
 };
 
 const USAGE = `ainarres — agent CLI (verbs over PostgREST)
@@ -590,6 +669,7 @@ const USAGE = `ainarres — agent CLI (verbs over PostgREST)
   status  [--lane L] [--limit N] [--watch [--interval 2]]   one-glance oversight summary (board + active + abandoned + why-stuck)
   events  [--lane L] [--task UUID] [--family F] [--type X] [--limit N] [--json]   event timeline joined to the acting family
   report  [--lane L] [--limit N]   end-of-run report: shipped (PRs) · failed · escalations · activity by family
+  record-usage  --actor SUB (--from-log PATH --family F | --data JSON) [--sweep ID] [--task UUID]   stamp a sweep's token spend (driver/oversight; tokens only, no USD)
 
 env: AINARRES_BASE_URL, JWT_SECRET (token), AINARRES_TOKEN (bearer; --token overrides)`;
 
