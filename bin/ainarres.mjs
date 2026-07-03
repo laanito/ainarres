@@ -239,7 +239,18 @@ function familyOfTransition(timeline, taskId, from, to) {
   return null;
 }
 
-export function formatReport({ board = [], timeline = [] } = {}, { lane = null } = {}) {
+// Compact token count for the report (1234 → "1.2k", 1_200_000 → "1.2M"). null/
+// undefined → "unknown" — a family we could not measure must read as unknown, NEVER
+// as 0 (which would read as free). Pure.
+export function fmtTokens(n) {
+  if (n == null) return "unknown";
+  const v = Number(n);
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 1_000) return `${(v / 1_000).toFixed(1)}k`;
+  return String(v);
+}
+
+export function formatReport({ board = [], timeline = [], trackRecord = [] } = {}, { lane = null } = {}) {
   const lines = [lane ? `end-of-run report — lane ${lane}` : "end-of-run report — all lanes"];
 
   // Newest-first PR reference for a task, dug out of its transition artifacts.
@@ -313,6 +324,30 @@ export function formatReport({ board = [], timeline = [] } = {}, { lane = null }
   lines.push("activity by family:");
   if (byFamily.size === 0) lines.push("  (none)");
   for (const fam of [...byFamily.keys()].sort()) lines.push(`  - ${fam}: ${byFamily.get(fam)} events`);
+
+  // Family track record (M20, api.family_track_record): the fair, attributable
+  // per-(family, capability) record the M21 ban rule will read. Competence (delivered
+  // / rejected / reject-rate / cross-family) and token spend are shown SIDE BY SIDE but
+  // never blended — spend ≠ competence (D3): a token-heavy family reads as expensive,
+  // not failing. Tokens are "unknown" (not 0) for a family whose harness emits no
+  // parseable counts (opencode/grok today) — unknown ≠ free.
+  lines.push("family track record (competence · spend — kept separate; M20 signal, no consequence yet):");
+  if (trackRecord.length === 0) {
+    lines.push("  (none)");
+  } else {
+    const sorted = [...trackRecord].sort((a, b) =>
+      (a.family ?? "").localeCompare(b.family ?? "") || (a.capability ?? "").localeCompare(b.capability ?? ""));
+    for (const r of sorted) {
+      const rate = r.reject_rate == null ? "n/a" : `${Math.round(Number(r.reject_rate) * 100)}%`;
+      const perDel = r.tokens_per_delivery == null ? "" : `, ${fmtTokens(r.tokens_per_delivery)}/delivery`;
+      lines.push(
+        `  - ${r.family} / ${r.capability}: ` +
+        `${r.delivered} delivered, ${r.rejected} rejected (${rate}), ${r.cross_family_rejected} cross-family` +
+        ` · tokens: ${fmtTokens(r.total_tokens)}${perDel}`,
+      );
+    }
+    lines.push("  (spend is a separate signal — a token-heavy but passing family is expensive, not failing)");
+  }
 
   return lines.join("\n");
 }
@@ -582,14 +617,19 @@ const COMMANDS = {
     const laneFilter = (q) => { if (lane) q.set("lane", `eq.${lane}`); return q; };
     const boardQ = laneFilter(new URLSearchParams());
     const tlQ = laneFilter(new URLSearchParams()); tlQ.set("limit", values.limit ?? "1000");
-    const [b, t] = await Promise.all([
+    // The track record (M20) is per (family, capability), not lane-scoped, so it is
+    // fetched unfiltered. Degrade gracefully: a substrate without the view (or an
+    // error) leaves the record section empty rather than failing the whole report.
+    const [b, t, tr] = await Promise.all([
       restGet(`board?${boardQ}`, token),
       restGet(`timeline?${tlQ}`, token),
+      restGet(`family_track_record?order=family.asc,capability.asc`, token),
     ]);
     for (const r of [b, t]) {
       if (!r.httpOk) { emit(r.body ?? { ok: false, code: "http_error", status: r.status }, false); return; }
     }
-    process.stdout.write(`${formatReport({ board: b.body, timeline: t.body }, { lane })}\n`);
+    const trackRecord = tr.httpOk && Array.isArray(tr.body) ? tr.body : [];
+    process.stdout.write(`${formatReport({ board: b.body, timeline: t.body, trackRecord }, { lane })}\n`);
   },
 
   // record-usage — M20 Slice A: stamp a sweep's TOKEN spend onto the task the actor
