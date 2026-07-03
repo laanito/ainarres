@@ -125,6 +125,21 @@ release_stranded() {
   fi
 }
 
+# M20 Slice A (design/track-record.md D1): record a finished sweep's TOKEN spend.
+# Best-effort — NEVER fails the run. The CLI parses the sweep log per family and calls
+# the privileged `record_usage` verb (oversight token); it writes nothing (noting the
+# miss on stderr → usage.log) when the harness emits no parseable token counts
+# (opencode/grok today) or the sweep did no work — so an unmeasured family reads as
+# "unknown", never "free". Attribution is the worker's own sub (→ its family); oversight
+# only asserts the number. $1=poller/tier (→ family), $2=worker sub, $3=sweep log.
+record_usage() {
+  local poller="$1" sub="$2" logf="$3"
+  [ -n "$sub" ] && [ -f "$logf" ] || return 0
+  ai record-usage --actor "$sub" --family "$(role_family "$poller")" \
+     --from-log "$logf" --sweep "$sub" --token "$OVERSIGHT_TOKEN" \
+     >/dev/null 2>>"$RUN_DIR/usage.log" || true
+}
+
 # Run ONE tier's harness sweep to completion (its skill loops claim→work→advance
 # until "nothing claimable", then exits). Backgrounded + waited so the trap can kill
 # its whole subtree on interrupt. The token uses a KNOWN sub so we can release a
@@ -141,6 +156,7 @@ run_sweep() {
   CURRENT_SWEEP_PID=$!
   wait "$CURRENT_SWEEP_PID" || rc=$?
   CURRENT_SWEEP_PID=""
+  record_usage "$tier" "$sub" "$RUN_DIR/$tier.log"
   release_stranded "$sub" "$tok"
   return "$rc"
 }
@@ -163,6 +179,7 @@ run_pool() {
   POOL_PIDS=("${pids[@]}")                 # expose to stop_active for the kill trap
   for i in "${!pids[@]}"; do
     wait "${pids[$i]}" || true             # a member failing is fine; the board is the truth
+    record_usage "$tier" "${subs[$i]}" "$RUN_DIR/$tier-${subs[$i]}.log"
     release_stranded "${subs[$i]}" "${toks[$i]}"
   done
   POOL_PIDS=()
@@ -175,16 +192,17 @@ run_pool() {
 # grok holds capability:integrate, so integration stays single even though review fans
 # out. Each peer gets its own sub → its own stranded-release (design/federation.md).
 run_concurrent() {
-  local pollers=("$@") i name sub tok pids=() subs=() toks=()
+  local pollers=("$@") i name sub tok pids=() subs=() toks=() names=()
   for name in "${pollers[@]}"; do
     sub="$(uuidgen | tr 'A-Z' 'a-z')"
     tok="$(mint_token "$name" "$sub")"
     AINARRES_TOKEN="$tok" LOOP_SWEEP_ID="$sub" harness_sweep "$name" >>"$RUN_DIR/$name.log" 2>&1 &
-    pids+=("$!"); subs+=("$sub"); toks+=("$tok")
+    pids+=("$!"); subs+=("$sub"); toks+=("$tok"); names+=("$name")
   done
   POOL_PIDS=("${pids[@]}")                 # expose to stop_active for the kill trap
   for i in "${!pids[@]}"; do
     wait "${pids[$i]}" || true
+    record_usage "${names[$i]}" "${subs[$i]}" "$RUN_DIR/${names[$i]}.log"
     release_stranded "${subs[$i]}" "${toks[$i]}"
   done
   POOL_PIDS=()
