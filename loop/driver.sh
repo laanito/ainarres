@@ -61,6 +61,19 @@ counts() {
     | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{r=[]} if(!Array.isArray(r))r=[]; const a=r.filter(x=>!x.is_terminal&&!x.blocked).length; const b=r.filter(x=>x.blocked).length; process.stdout.write(a+" "+b)})'
 }
 
+# Total tasks on the board + whether the board was REACHABLE. Prints "N R": N = total
+# task rows (terminal ones included — a genuinely drained board still shows its `done`
+# tasks), R = 1 if the board view responded (even empty), 0 if the call failed. This is
+# what lets the end-of-run check tell "legitimately drained" from "wiped/unreachable"
+# (the 2026-07-04 board-wipe): counts() alone reads 0 active/0 blocked for BOTH.
+board_total() {
+  local out rc
+  out="$(ai board --lane "$LOOP_LANE" --token "$OVERSIGHT_TOKEN" 2>/dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ]; then echo "0 0"; return; fi
+  printf '%s' "$out" \
+    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{r=[]} if(!Array.isArray(r))r=[]; process.stdout.write(r.length+" 1")})'
+}
+
 # A stable signature of the board (task → stage/blocked). If a full round leaves
 # this unchanged, no tier moved anything → the loop is stuck and we stop.
 board_sig() {
@@ -236,6 +249,12 @@ else
   fi
 fi
 
+# Record how many tasks the board holds now that it is seeded. If the board later ends
+# EMPTY, comparing against this tells a legitimate drain (tasks reached `done`, still on
+# the board) from a WIPE (tasks vanished — the 2026-07-04 incident, where a harness ran
+# `make reset`/`truncate` and cleared the board mid-run; guarded now via loop/guard-bin).
+read -r SEEDED_TOTAL _ <<<"$(board_total)"
+
 # 2. Concurrent rounds (M18): each round fans the primary cheap implementer out into
 #    a pool of LOOP_POOL_SIZE simultaneous sweeps (the throughput), then runs the
 #    serial tiers once each (fallback ceiling, then frontier review/integrate — the
@@ -280,8 +299,27 @@ ai status --lane "$LOOP_LANE" --token "$OVERSIGHT_TOKEN" || true
 echo
 ai report --lane "$LOOP_LANE" --token "$OVERSIGHT_TOKEN" || true
 read -r active blocked <<<"$(counts)"
+read -r final_total reachable <<<"$(board_total)"
+
+# A WIPE masquerades as a drain: counts() reads 0 active/0 blocked whether every task
+# reached `done` OR the board was emptied/torn down out from under us. Distinguish them.
+# We seeded ${SEEDED_TOTAL} tasks; a genuine drain leaves those tasks on the board at a
+# terminal stage. Zero tasks now (or an unreachable board) after seeding > 0 means the
+# board was WIPED — fail loudly, never report success (2026-07-04 board-wipe; guarded via
+# loop/guard-bin, but the driver must still refuse to call a wipe a drain).
+if [ "${SEEDED_TOTAL:-0}" -gt 0 ] && { [ "$reachable" -eq 0 ] || [ "$final_total" -eq 0 ]; }; then
+  if [ "$reachable" -eq 0 ]; then
+    echo "✗ driver: the loop board is UNREACHABLE at the end of the run (was seeded with ${SEEDED_TOTAL} task(s))." >&2
+    echo "          the substrate went away mid-run — this is NOT a drain. Check the loop stack / logs." >&2
+  else
+    echo "✗ driver: the board is EMPTY but was seeded with ${SEEDED_TOTAL} task(s) and shows NO terminal tasks —" >&2
+    echo "          it was WIPED mid-run, not drained (a harness likely cleared it; see loop/guard-bin). NOT a success." >&2
+  fi
+  exit 2
+fi
+
 if [ "$active" -eq 0 ] && [ "$blocked" -eq 0 ]; then
-  echo "✓ driver: board drained — every dev task reached a terminal stage."
+  echo "✓ driver: board drained — every dev task reached a terminal stage (${final_total} terminal task(s) on the board)."
   exit 0
 fi
 echo "✗ driver: run ended with ${active} active / ${blocked} blocked task(s) — needs attention." >&2
