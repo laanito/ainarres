@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Harness guard shim: `dbmate` is disabled inside a loop harness — migrations (esp.
+# `dbmate down`/`drop`) mutate the shared substrate schema. See loop/guard-bin/.harness-deny.
+exec "$(dirname "$0")/.harness-deny" dbmate "$@"

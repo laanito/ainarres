@@ -92,4 +92,10 @@ EOF
 )"
 fi
 
+# Harness command guard (loop/guard-bin, 2026-07-04 board-wipe): deny make/docker/psql/
+# dbmate to the harness so a sweep can't tear down the shared substrates. Prepended, so the
+# absolutely-resolved "$CLAUDE" below is unaffected; only PATH-resolved child commands hit
+# the shims. A temporary guard until the v7 service removes the make/docker substrate-cheat.
+export PATH="$REPO/loop/guard-bin:$PATH"
+
 exec "$CLAUDE" -p "$PROMPT" --model "$MODEL" $FLAGS --output-format json

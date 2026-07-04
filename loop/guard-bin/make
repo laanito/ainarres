@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Harness guard shim: `make` is disabled inside a loop harness (it controls shared
+# substrates). See loop/guard-bin/.harness-deny. Prepended to PATH by the harness wrappers.
+exec "$(dirname "$0")/.harness-deny" make "$@"

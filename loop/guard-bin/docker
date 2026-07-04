@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Harness guard shim: `docker` (incl. `docker compose down/-v`) is disabled inside a loop
+# harness — it can tear down shared substrates. See loop/guard-bin/.harness-deny.
+exec "$(dirname "$0")/.harness-deny" docker "$@"

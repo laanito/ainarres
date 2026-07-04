@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Harness guard shim: `psql` is disabled inside a loop harness — a worker talks to the
+# substrate over the HTTP CLI, never raw SQL (a raw `truncate`/`delete` wipes the board).
+# See loop/guard-bin/.harness-deny.
+exec "$(dirname "$0")/.harness-deny" psql "$@"

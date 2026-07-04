@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Shared refusal for commands guarded inside a loop harness (loop/guard-bin/README.md,
+# memory loop-harness-command-guard). $1 = the guarded command name; the rest are its args.
+#
+# Why: a swarm harness that runs `make reset` / `make loop-*` / `docker compose down` /
+# `truncate` can wipe the SHARED loop + test substrates mid-run (the 2026-07-04 board-wipe
+# incident, where grok ran `make reset` ×13 + `truncate task` off-script). These commands
+# are a TEMPORARY substrate-control cheat the harness only has because there is no standing
+# service yet; the v7 service removes them entirely. Until then we deny them at the harness
+# PATH layer. Workers validate with the task's SUBSTRATE-FREE command (npx vitest run <file>),
+# never with make/docker/psql/dbmate.
+cmd="${1:-command}"; shift || true
+{
+  echo "harness-guard: '$cmd $*' is BLOCKED inside the loop harness."
+  echo "harness-guard: $cmd controls shared substrates and can wipe the loop/test boards"
+  echo "harness-guard: mid-run (2026-07-04 incident). It is a temporary cheat the v7 service removes."
+  echo "harness-guard: validate the task with its SUBSTRATE-FREE command (e.g. npx vitest run <file>)."
+} >&2
+exit 97

@@ -56,6 +56,12 @@ if [ -z "$OPENCODE" ]; then
 fi
 [ -x "$OPENCODE" ] || command -v "$OPENCODE" >/dev/null 2>&1 || { echo "opencode-implementer: '$OPENCODE' is not executable" >&2; exit 2; }
 
+# Harness command guard (loop/guard-bin, 2026-07-04 board-wipe): deny make/docker/psql/
+# dbmate to the harness so a sweep can't tear down the shared substrates. Uses $REPO (the
+# main checkout) so the guard exists even when we've cd'd into a per-sweep worktree. Only
+# PATH-resolved child commands hit the shims; the absolute "$OPENCODE" is unaffected.
+export PATH="$REPO/loop/guard-bin:$PATH"
+
 exec "$OPENCODE" run \
   "Run the AINARRES implementer loop until a claim returns code:empty, then stop. Everything you need is in each task." \
   --agent ainarres-implementer -m "$MODEL"
