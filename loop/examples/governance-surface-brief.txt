@@ -1,0 +1,90 @@
+Make v5 governance VISIBLE: add a read-only oversight surface + end-of-run report
+section that shows who the substrate has temp-banned, who is trending toward a ban, and
+— unmistakably — when the SINGLETON INTEGRATOR is halted (the merge queue is stopped and
+a human must intervene). This is M21 Slice B (design/reflexive-revocation.md D7, Slice B):
+the loud surface over the governance CORE that M21 Slice A already shipped. It applies NO
+consequence and touches NO auth path — it only DISPLAYS state that already exists.
+
+NOTE — this brief is SINGLE-USE: the run ships its task(s) to `main`, so a re-run needs a
+fresh brief whose work isn't already on main.
+
+WHAT EXISTS TODAY (M21 Slice A — read before designing; do NOT change any of it):
+- app.feature_denials(family_id, feature_id, reason, created_at, expires_at). A denial is
+  ACTIVE when `expires_at IS NULL` (permanent/human) OR `expires_at > now()` (a temporary
+  reflexive ban). An expired denial (expires_at <= now()) is inactive (self-healed).
+- app.governance_strikes(family_id, feature_id, strikes, ban_count, first_strike_at,
+  last_strike_at). `strikes` = attributable rejects SINCE THE LAST BAN (resets to 0 on a
+  ban); `ban_count` = total bans ever (monotonic, survives expiry). One row per
+  (family, capability) that has ever been struck.
+- app.governance_policy + app.resolve_governance_policy(p_capability text, p_workflow uuid)
+  RETURNS TABLE(threshold int, base interval, cap interval) — resolves the reject
+  threshold + backoff, capability→workflow→system default (seeded system: threshold=3,
+  base=1h, cap=24h). Call it with p_workflow = NULL for a workflow-agnostic threshold
+  (falls back to capability-scoped, then system).
+- A capability is a feature NAME, e.g. 'role:implementer'. app.features(id, name) maps
+  feature_id ↔ name. app.agent_families(id, key) maps family_id ↔ the family key.
+- The SINGLETON integrator capabilities are 'role:integrator' and 'capability:integrate'
+  (only one family, grok, holds them — federation.md D5). A ban on either halts the merge
+  queue: that is the human signal and MUST be loud.
+- Oversight views live in the `api` schema, `grant select ... to oversight` (see
+  api.board / api.timeline / api.family_track_record in db/migrations, and the M20
+  observability-views migration for the exact style). The end-of-run report is the pure
+  `formatReport({ board, timeline, trackRecord }, { lane })` in bin/ainarres.mjs; the
+  `report` command fetches the views and passes their rows in. Pure-formatter tests live
+  in test/status-format.test.ts; DB view tests follow test/track-record.test.ts.
+
+DESIGNER — decompose into TWO DEPENDENT tasks linked with --depends-on (the report task
+depends on the view task; the report reads the view). Both are READ-ONLY and low-risk. Do
+NOT invent stages, do NOT modify Slice A's tables/functions, do NOT add any capability
+effect. plpgsql/plain-SQL only; one migration with up AND down.
+
+THE FEATURE:
+
+TASK 1 — a read-only view `api.governance_status`. One row per (family, capability) that
+has a governance_strikes row. `grant select` to oversight (revoke from public). Columns:
+- family        text  — the agent_families.key
+- capability    text  — the features.name (e.g. 'role:implementer')
+- strikes       int   — governance_strikes.strikes
+- ban_count     int   — governance_strikes.ban_count
+- threshold     int   — from resolve_governance_policy(capability, NULL)
+- banned        boolean — TRUE iff an ACTIVE feature_denials row exists for
+                          (family, capability): expires_at IS NULL OR expires_at > now()
+- permanent     boolean — TRUE iff banned AND expires_at IS NULL
+- heal_at       timestamptz — the active denial's expires_at (NULL when not temp-banned)
+- seconds_to_heal int  — extract(epoch from (heal_at - now()))::int when temp-banned, else NULL
+- trending      boolean — TRUE iff NOT banned AND strikes >= threshold - 1 (one strike from a ban)
+- singleton_halt boolean — TRUE iff banned AND capability IN ('role:integrator','capability:integrate')
+Down-migration drops the view.
+
+TASK 2 (depends on TASK 1) — surface it in the end-of-run report. Extend the PURE
+`formatReport` to accept the governance rows (add a `governance = []` field to its first
+argument, exactly as `trackRecord` was added) and print, after the track-record section, a
+"governance:" section:
+- If no rows or none banned/trending: "  (all families in good standing)".
+- For each banned row: "  - <family> / <capability>: BANNED (<permanent ? 'permanent — human' : 'heals in <Hh Mm>'>)".
+- For each trending (not banned) row: "  - <family> / <capability>: <strikes>/<threshold> strikes — trending toward a ban".
+- If ANY row has singleton_halt = true, additionally print one unmistakable line:
+    "  ⚠ MERGE QUEUE HALTED — the integrator capability is banned; a human must intervene."
+Keep formatReport pure and total (never throws on partial/empty input). Then wire the
+`report` command (bin/ainarres.mjs) to fetch `api.governance_status` (like it fetches
+family_track_record) and pass the rows in; degrade gracefully to [] if the view is absent.
+
+ACCEPTANCE (new assertions must FAIL on current main):
+- TASK 1 (DB test, e.g. test/governance-status.test.ts, following test/track-record.test.ts):
+  seed a family with an ACTIVE temporary denial on 'role:implementer' → the row shows
+  banned=true, permanent=false, seconds_to_heal > 0, trending=false. A family with
+  strikes = threshold-1 and NO denial → trending=true, banned=false. An EXPIRED denial
+  (expires_at in the past) → banned=false. A banned 'role:integrator' → singleton_halt=true.
+  The view is oversight-only (anonymous refused).
+- TASK 2 (pure test in test/status-format.test.ts): given governance rows with a temp-banned
+  family, formatReport prints its "BANNED (heals in …)" line; a trending row prints the
+  "N/threshold strikes — trending" line; a singleton_halt row prints the "⚠ MERGE QUEUE
+  HALTED" line; empty/none-banned prints "(all families in good standing)".
+
+VALIDATE (per task — discriminating, must fail on main and pass after):
+- TASK 1:  npx vitest run test/governance-status.test.ts
+- TASK 2:  npx vitest run test/status-format.test.ts
+
+Do not touch Slice A's core (feature_denials semantics, governance_strikes,
+register_reject, effective_features). This slice only READS and DISPLAYS. Keep it
+read-only, oversight-scoped, and pure where it renders.
