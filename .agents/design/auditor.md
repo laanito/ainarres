@@ -110,12 +110,19 @@ permanent-ban trigger. Judgment (flaggable, eventually automatable) is cleanly s
 the irreversible capability mutation (human-only). This mirrors M21's D8 "governance only
 removes": here the auditor only **signals**; only `oversight` **acts** on permanence.
 
-**D7 — Everything is an event; no new mutable capability state beyond M21's.** Flags and
-governance actions are **append-only events** (the substrate's spine); recommendations are
-**computed** from events + `governance_strikes` (no new table). The only writes to capability
-state remain (temporary) M21's `register_reject` and (permanent / lift) the D4 oversight RPC —
-both through `feature_denials`. M22 stays "signal + envelope," adding one feature, verbs, and
-read-only surface — no new mechanism (ADR 0022).
+**D7 — Everything is append-only; no new mutable capability state beyond M21's.** Flags are
+**events** (task-anchored — D8, so they fit `events.task_id NOT NULL`); recommendations are
+**computed** from events + `governance_strikes` (no new table). *Reconciliation found during
+the assisted build:* the **human governance actions** (permanent ban / lift) are
+family/capability-scoped, **not** task-scoped, and `events.task_id` is `NOT NULL` — so putting
+them in `app.events` is impossible without weakening a core invariant every task-view relies
+on. They therefore live in a small **append-only `app.governance_actions` ledger** (block
+trigger + revoked grants, mirroring `events`). This honors the "append-only, no *mutable*
+state" intent while respecting the substrate's task-scoped event log. The only writes to
+capability state remain (temporary) M21's `register_reject` and (permanent / lift) the D4
+oversight RPC — both through `feature_denials`. M22 stays "signal + envelope," adding one
+feature, verbs, one append-only ledger, and read-only surface — no new *revocation* mechanism
+(ADR 0022).
 
 **D8 — A flag anchors to a shipped TASK; a "delivery" is its task(s) in v1.** `events.task_id`
 is `NOT NULL`. An out-of-band audit of a delivery (brief → task[s]) **anchors its flag to the

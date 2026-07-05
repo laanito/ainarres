@@ -15,6 +15,7 @@ describe("domain tables", () => {
     "family_features",
     "feature_denials",
     "features",
+    "governance_actions",
     "governance_policy",
     "governance_strikes",
     "lanes",
