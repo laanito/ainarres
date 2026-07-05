@@ -1,0 +1,85 @@
+Surface v5 governance in the END-OF-RUN REPORT: extend the report so it shows who the
+substrate has temp-banned, who is trending toward a ban, and — unmistakably — when the
+SINGLETON INTEGRATOR is halted (the merge queue is stopped and a human must intervene).
+
+This is M21 Slice B, the REPORT-LINE half. The read-only view it reads
+(`api.governance_status`) ALREADY EXISTS ON MAIN (shipped separately). This slice ONLY
+renders that view in the report + wires the fetch. It applies NO consequence, touches NO
+auth path, and adds NO DB migration — it is a PURE FORMATTER change plus one graceful
+fetch. It is fully SUBSTRATE-FREE to validate (a vitest unit test, no database).
+
+NOTE — this brief is SINGLE-USE: the run ships its task to `main`, so a re-run needs a
+fresh brief whose work isn't already on main.
+
+WHAT EXISTS TODAY (read before coding; do NOT change any of it):
+- api.governance_status — a read-only, oversight-scoped view (on main). One row per
+  (family, capability) that has ever been struck. Columns you will render:
+    family          text        — the family key (e.g. 'grok+grok-build')
+    capability      text        — the feature name (e.g. 'role:implementer')
+    strikes         int         — attributable rejects since the last ban
+    ban_count       int         — total bans ever (monotonic)
+    threshold       int         — the reject threshold from policy
+    banned          boolean     — an ACTIVE denial exists for (family, capability)
+    permanent       boolean     — banned AND the denial never expires (human-set)
+    heal_at         timestamptz — the active denial's expires_at (NULL when not temp-banned)
+    seconds_to_heal int         — seconds until heal_at (NULL when not temp-banned)
+    trending        boolean     — NOT banned AND one strike from the threshold
+    singleton_halt  boolean     — banned AND capability is the integrator capability
+                                  ('role:integrator' or 'capability:integrate')
+- bin/ainarres.mjs exports the PURE `formatReport({ board, timeline, trackRecord }, { lane })`.
+  It already renders shipped / failed / escalations / activity-by-family / family-track-record
+  sections and is pure + total (never throws on partial/empty input). The `report` command
+  fetches the views (board, timeline, family_track_record) and passes their rows in, degrading
+  gracefully to [] when a view is absent or errors. `fmtTokens` is the model for a small pure
+  helper. Pure-formatter tests live in test/status-format.test.ts.
+
+THE FEATURE — ONE TASK (no DB migration, no new view; the view is already on main):
+
+1. Extend the PURE `formatReport` to accept the governance rows: add a `governance = []`
+   field to its first argument, EXACTLY as `trackRecord` was added. Print, AFTER the
+   family-track-record section, a "governance:" section:
+   - If there are no rows, or no row is banned or trending:
+       "  (all families in good standing)"
+   - For each BANNED row (banned = true), one line:
+       "  - <family> / <capability>: BANNED (permanent — human)"        when permanent = true
+       "  - <family> / <capability>: BANNED (heals in <Hh Mm>)"          when temp-banned
+     Derive "<Hh Mm>" from seconds_to_heal (e.g. 5400 → "1h 30m"; under an hour → "0h Mm";
+     if seconds_to_heal is null/negative on a temp ban, print "BANNED (healing)"). Keep it
+     total — never throw on odd input.
+   - For each TRENDING row (trending = true, and NOT banned), one line:
+       "  - <family> / <capability>: <strikes>/<threshold> strikes — trending toward a ban"
+   - If ANY row has singleton_halt = true, additionally print ONE unmistakable line
+     (after the per-row lines):
+       "  ⚠ MERGE QUEUE HALTED — the integrator capability is banned; a human must intervene."
+   Sort banned rows before trending rows; within each group sort by family then capability
+   (match the track-record section's ordering style). Keep `formatReport` pure and total.
+
+2. Wire the `report` command (bin/ainarres.mjs) to fetch `api.governance_status` (exactly
+   like it fetches family_track_record — unfiltered, not lane-scoped) and pass the rows in
+   as `governance`. Degrade gracefully to [] if the view is absent or the request errors —
+   a substrate without the view must still produce a full report, never fail.
+
+ACCEPTANCE — add assertions to test/status-format.test.ts (the PURE formatReport suite).
+They must FAIL on current main (no governance section exists yet) and PASS after:
+- Given governance rows including a TEMP-banned family (banned=true, permanent=false,
+  seconds_to_heal=5400), formatReport prints
+  "  - <family> / <capability>: BANNED (heals in 1h 30m)".
+- A PERMANENT ban (banned=true, permanent=true) prints "BANNED (permanent — human)".
+- A TRENDING row (trending=true, banned=false, strikes=2, threshold=3) prints
+  "  - <family> / <capability>: 2/3 strikes — trending toward a ban".
+- A row with singleton_halt=true additionally prints the exact
+  "  ⚠ MERGE QUEUE HALTED — the integrator capability is banned; a human must intervene." line.
+- Empty governance (or none banned/trending) prints "  (all families in good standing)"
+  and formatReport({}) still renders every existing section (pure/total — no throw).
+
+VALIDATE (substrate-free — this is the ONLY validate; it needs NO database, NO docker,
+NO make, NO psql. Run it verbatim; it must fail on main and pass after your change):
+    npx vitest run test/status-format.test.ts
+
+CONSTRAINTS:
+- No DB migration. No new view. Do NOT modify api.governance_status or any Slice A core
+  (feature_denials, governance_strikes, register_reject, effective_features, policy).
+- Keep `formatReport` pure and total. Do not make it fetch anything itself — the `report`
+  command does the fetch and passes rows in (mirror the trackRecord wiring precisely).
+- This slice only READS and DISPLAYS. JavaScript only (bin/ainarres.mjs is ESM); tests are
+  vitest in test/status-format.test.ts.
