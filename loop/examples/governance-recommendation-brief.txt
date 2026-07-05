@@ -1,0 +1,91 @@
+Surface the M22 HUMAN BOUNDARY in the END-OF-RUN REPORT: extend the report's governance
+section to show (a) the auditor's open QUALITATIVE FLAGS, (b) a loud PERMANENT-BAN
+RECOMMENDATION when a family recurs (reflexive bans) or is repeatedly flagged, and (c) the
+human BAN/LIFT action trail. This closes v5's visible surface.
+
+This is M22 Slice B, the REPORT-LINE half. The read-only views it reads
+(`api.audit_flags`, `api.governance_actions`, and `api.governance_status.recommend_ban_count`)
+ALREADY EXIST ON MAIN (shipped separately). This slice ONLY renders those rows + wires the
+fetch. It applies NO consequence, touches NO auth path, adds NO DB migration — a PURE
+FORMATTER change plus graceful fetches. It is fully SUBSTRATE-FREE to validate (a vitest
+unit test, no database).
+
+NOTE — this brief is SINGLE-USE: the run ships its task to `main`, so a re-run needs a
+fresh brief whose work isn't already on main.
+
+WHAT EXISTS TODAY (read before coding; do NOT change any of it):
+- bin/ainarres.mjs exports the PURE `formatReport({ board, timeline, trackRecord, governance },
+  { lane })`. It already renders a "governance (v5 — substrate-revoked capabilities):" section
+  from the `governance` rows (banned / trending / ⚠ MERGE QUEUE HALTED), pure + total. The
+  `report` command already fetches `api.governance_status` into `governance` and degrades to []
+  on error. `fmtTokens` / `fmtHeal` are the model for small pure helpers. Pure-formatter tests
+  live in test/status-format.test.ts.
+- `api.governance_status` rows now also carry `recommend_ban_count` (int) — the ban→recommend
+  threshold; `ban_count` is already present.
+- `api.audit_flags` — read-only, oversight-scoped. Columns: `family` (the FLAGGED family),
+  `capability`, `flag_count` (int), `last_gap` (text), `last_severity` (text),
+  `last_flagged_at`, `recommend_flag_count` (int — the flag→recommend threshold).
+- `api.governance_actions` — read-only, oversight-scoped, newest-first. Columns: `family`,
+  `capability`, `action` ('ban_permanent' | 'lift'), `reason` (text, nullable), `actor_sub`,
+  `created_at`.
+
+THE FEATURE — ONE TASK (no DB migration; the views are already on main):
+
+1. Extend the PURE `formatReport` first argument with two new fields, `auditFlags = []` and
+   `governanceActions = []` (EXACTLY as `governance` was added). Extend the existing
+   "governance (v5 …):" section — AFTER the banned/trending lines and the MERGE QUEUE HALTED
+   line — with three sub-parts. Keep `formatReport` pure and total (never throw on empty/
+   partial input); render a sub-part's lines only when it has rows.
+
+   (a) OPEN AUDIT FLAGS — for each `auditFlags` row, one line:
+       "  - <family> / <capability>: <flag_count> audit flag(s) — <last_gap>"
+       Sort by family then capability.
+
+   (b) PERMANENT-BAN RECOMMENDATIONS — a loud line per (family, capability) that qualifies,
+       from EITHER source, deduped to ONE line per (family, capability):
+       - a `governance` row with recommend_ban_count != null AND ban_count >= recommend_ban_count
+         → qualifies, reason "<ban_count> reflexive bans ≥ <recommend_ban_count>".
+       - an `auditFlags` row with recommend_flag_count != null AND flag_count >= recommend_flag_count
+         → qualifies, reason "<flag_count> audit flags ≥ <recommend_flag_count>".
+       If BOTH sources qualify for the same (family, capability), join the reasons with "; ".
+       Each qualifying pair prints exactly one:
+       "  ⚑ RECOMMEND PERMANENT BAN — <family> / <capability> (<reason>); a human must decide."
+
+   (c) HUMAN ACTION TRAIL — if `governanceActions` has rows, a "  governance actions:" label
+       then, for each row (already newest-first; cap at the 10 most recent), one line:
+       "    - <action> <family> / <capability><reason ? ' — ' + reason : ''>".
+
+2. Wire the `report` command (bin/ainarres.mjs) to also fetch `api.audit_flags` and
+   `api.governance_actions` (unfiltered, like family_track_record / governance_status) and
+   pass them in as `auditFlags` / `governanceActions`. Degrade gracefully to [] if a view is
+   absent or the request errors — a substrate without the views must still produce a full
+   report.
+
+ACCEPTANCE — add assertions to test/status-format.test.ts (the PURE formatReport suite).
+They must FAIL on current main (no flag/recommend/trail rendering) and PASS after:
+- Given `auditFlags: [{ family: 'f', capability: 'role:designer', flag_count: 2, last_gap: 'ignores the spec', last_severity: 'critical' }]`, formatReport prints
+  "  - f / role:designer: 2 audit flag(s) — ignores the spec".
+- Given `governance: [{ family: 'g', capability: 'role:implementer', banned: false, ban_count: 4, recommend_ban_count: 3 }]`, formatReport prints a line containing
+  "⚑ RECOMMEND PERMANENT BAN — g / role:implementer" and "4 reflexive bans ≥ 3" and "a human must decide".
+- Given `auditFlags: [{ family: 'h', capability: 'role:designer', flag_count: 3, recommend_flag_count: 2, last_gap: 'x' }]`, formatReport prints a
+  "⚑ RECOMMEND PERMANENT BAN — h / role:designer" line whose reason contains "3 audit flags ≥ 2".
+- A (family, capability) that qualifies from BOTH sources prints exactly ONE recommend line
+  (reasons joined with "; ").
+- Given `governanceActions: [{ family: 'f', capability: 'role:designer', action: 'lift', reason: 'reinstated' }, { family: 'f', capability: 'role:designer', action: 'ban_permanent', reason: 'repeat' }]`,
+  formatReport prints "  governance actions:" and "    - lift f / role:designer — reinstated".
+- formatReport({}) still renders every existing section and does not throw; with no flags/
+  recommendations/actions it prints NONE of the new lines (and the existing "(all families in
+  good standing)" behavior is unchanged).
+
+VALIDATE (substrate-free — the ONLY validate; needs NO database, NO docker, NO make, NO psql.
+Run it verbatim; it must fail on main and pass after your change):
+    npx vitest run test/status-format.test.ts
+
+CONSTRAINTS:
+- No DB migration. No new view. Do NOT modify api.audit_flags / api.governance_actions /
+  api.governance_status or any Slice A core.
+- Keep `formatReport` pure and total. Do not make it fetch anything itself — the `report`
+  command does the fetch and passes rows in (mirror the `governance` wiring precisely).
+- The recommendation DECISION lives HERE, in the pure formatter (comparing counts to the
+  thresholds the views expose) — this is deliberate and testable. This slice only READS and
+  DISPLAYS. JavaScript only (bin/ainarres.mjs is ESM); tests are vitest in test/status-format.test.ts.
