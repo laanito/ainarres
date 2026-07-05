@@ -250,7 +250,16 @@ export function fmtTokens(n) {
   return String(v);
 }
 
-export function formatReport({ board = [], timeline = [], trackRecord = [] } = {}, { lane = null } = {}) {
+// Format seconds-to-heal for a temporary ban (v5 governance). Pure. Returns a
+// human string like "1h 30m" or null when the value is absent/invalid.
+function fmtHeal(secs) {
+  if (secs == null || Number(secs) < 0 || Number.isNaN(Number(secs))) return null;
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  return `${h}h ${m}m`;
+}
+
+export function formatReport({ board = [], timeline = [], trackRecord = [], governance = [] } = {}, { lane = null } = {}) {
   const lines = [lane ? `end-of-run report — lane ${lane}` : "end-of-run report — all lanes"];
 
   // Newest-first PR reference for a task, dug out of its transition artifacts.
@@ -347,6 +356,36 @@ export function formatReport({ board = [], timeline = [], trackRecord = [] } = {
       );
     }
     lines.push("  (spend is a separate signal — a token-heavy but passing family is expensive, not failing)");
+  }
+
+  // Governance section (v5 — substrate-revoked capabilities): rows from
+  // api.governance_status. Banned (permanent first, then temp) before trending.
+  // Pure, null-guarded, never throws.
+  lines.push("governance (v5 — substrate-revoked capabilities):");
+  const banned = governance.filter(r => r && r.banned === true);
+  const trending = governance.filter(r => r && r.trending === true && r.banned !== true);
+  if (banned.length === 0 && trending.length === 0) {
+    lines.push("  (all families in good standing)");
+  } else {
+    const govSort = (a, b) =>
+      (a.family ?? "").localeCompare(b.family ?? "") || (a.capability ?? "").localeCompare(b.capability ?? "");
+    for (const r of [...banned].sort(govSort)) {
+      if (r.permanent === true) {
+        lines.push(`  - ${r.family} / ${r.capability}: BANNED (permanent — human)`);
+      } else {
+        const heal = fmtHeal(r.seconds_to_heal);
+        const suffix = heal != null ? `heals in ${heal}` : "healing";
+        lines.push(`  - ${r.family} / ${r.capability}: BANNED (${suffix})`);
+      }
+    }
+    for (const r of [...trending].sort(govSort)) {
+      lines.push(`  - ${r.family} / ${r.capability}: ${r.strikes}/${r.threshold} strikes — trending toward a ban`);
+    }
+  }
+  // Singleton-halt check: if ANY governance row has singleton_halt, print the
+  // unmistakable halt notice once.
+  if (governance.some(r => r && r.singleton_halt === true)) {
+    lines.push("  ⚠ MERGE QUEUE HALTED — the integrator capability is banned; a human must intervene.");
   }
 
   return lines.join("\n");
@@ -620,16 +659,19 @@ const COMMANDS = {
     // The track record (M20) is per (family, capability), not lane-scoped, so it is
     // fetched unfiltered. Degrade gracefully: a substrate without the view (or an
     // error) leaves the record section empty rather than failing the whole report.
-    const [b, t, tr] = await Promise.all([
+    // The governance view (v5) is similarly unfiltered and degrades to [] on error.
+    const [b, t, tr, gov] = await Promise.all([
       restGet(`board?${boardQ}`, token),
       restGet(`timeline?${tlQ}`, token),
       restGet(`family_track_record?order=family.asc,capability.asc`, token),
+      restGet(`governance_status?order=family.asc,capability.asc`, token),
     ]);
     for (const r of [b, t]) {
       if (!r.httpOk) { emit(r.body ?? { ok: false, code: "http_error", status: r.status }, false); return; }
     }
     const trackRecord = tr.httpOk && Array.isArray(tr.body) ? tr.body : [];
-    process.stdout.write(`${formatReport({ board: b.body, timeline: t.body, trackRecord }, { lane })}\n`);
+    const governance = gov.httpOk && Array.isArray(gov.body) ? gov.body : [];
+    process.stdout.write(`${formatReport({ board: b.body, timeline: t.body, trackRecord, governance }, { lane })}\n`);
   },
 
   // record-usage — M20 Slice A: stamp a sweep's TOKEN spend onto the task the actor

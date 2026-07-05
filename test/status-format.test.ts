@@ -335,6 +335,59 @@ describe("formatReport", () => {
     const out = formatReport({ trackRecord: [{ family: "f", capability: "role:x", delivered: 0, rejected: 0, cross_family_rejected: 0, reject_rate: null, total_tokens: null }] });
     expect(out).toContain("0 rejected (n/a)");
   });
+
+  // ── Governance section (v5 — substrate-revoked capabilities) ─────────────
+  test("temp ban: renders heal time from seconds_to_heal", () => {
+    const out = formatReport({
+      governance: [{ family: "grok+grok-build", capability: "role:implementer", banned: true, permanent: false, seconds_to_heal: 5400 }],
+    });
+    expect(out).toContain("  - grok+grok-build / role:implementer: BANNED (heals in 1h 30m)");
+  });
+
+  test("permanent ban: renders BANNED (permanent — human)", () => {
+    const out = formatReport({
+      governance: [{ family: "f", capability: "c", banned: true, permanent: true }],
+    });
+    expect(out).toContain("BANNED (permanent — human)");
+  });
+
+  test("trending row: renders strikes/threshold — trending toward a ban", () => {
+    const out = formatReport({
+      governance: [{ family: "f", capability: "c", trending: true, banned: false, strikes: 2, threshold: 3 }],
+    });
+    expect(out).toContain("  - f / c: 2/3 strikes — trending toward a ban");
+  });
+
+  test("singleton halt: prints the MERGE QUEUE HALTED warning once", () => {
+    const out = formatReport({
+      governance: [
+        { family: "f", capability: "role:implementer", banned: true, permanent: true, singleton_halt: true },
+        { family: "g", capability: "role:reviewer", banned: true, permanent: false, seconds_to_heal: 100, singleton_halt: true },
+      ],
+    });
+    const haltLine = "  ⚠ MERGE QUEUE HALTED — the integrator capability is banned; a human must intervene.";
+    expect(out).toContain(haltLine);
+    // Count occurrences — must be exactly one
+    expect(out.split(haltLine).length - 1).toBe(1);
+  });
+
+  test("good standing: empty governance or no banned/trending rows prints the placeholder", () => {
+    const out = formatReport({ governance: [] });
+    expect(out).toContain("  (all families in good standing)");
+
+    const out2 = formatReport({
+      governance: [{ family: "f", capability: "c", banned: false, trending: false }],
+    });
+    expect(out2).toContain("  (all families in good standing)");
+  });
+
+  test("totality: formatReport with governance still contains pre-existing sections and does not throw", () => {
+    expect(() => formatReport({})).not.toThrow();
+    const out = formatReport({});
+    expect(out).toContain("shipped (");
+    expect(out).toContain("family track record");
+    expect(out).toContain("governance");
+  });
 });
 
 describe("fmtTokens", () => {
