@@ -259,7 +259,7 @@ function fmtHeal(secs) {
   return `${h}h ${m}m`;
 }
 
-export function formatReport({ board = [], timeline = [], trackRecord = [], governance = [] } = {}, { lane = null } = {}) {
+export function formatReport({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [] } = {}, { lane = null } = {}) {
   const lines = [lane ? `end-of-run report — lane ${lane}` : "end-of-run report — all lanes"];
 
   // Newest-first PR reference for a task, dug out of its transition artifacts.
@@ -386,6 +386,53 @@ export function formatReport({ board = [], timeline = [], trackRecord = [], gove
   // unmistakable halt notice once.
   if (governance.some(r => r && r.singleton_halt === true)) {
     lines.push("  ⚠ MERGE QUEUE HALTED — the integrator capability is banned; a human must intervene.");
+  }
+
+  // M22 — Open audit flags (sorted by family then capability).
+  if (auditFlags.length > 0) {
+    const sorted = [...auditFlags].sort((a, b) =>
+      (a.family ?? "").localeCompare(b.family ?? "") || (a.capability ?? "").localeCompare(b.capability ?? ""));
+    for (const r of sorted) {
+      lines.push(`  - ${r.family} / ${r.capability}: ${r.flag_count} audit flag(s) — ${r.last_gap}`);
+    }
+  }
+
+  // M22 — Permanent-ban recommendations: deduped by (family, capability), qualifying
+  // from EITHER governance ban_count >= recommend_ban_count OR audit flag_count >=
+  // recommend_flag_count. When both sources qualify, reasons are joined with "; ".
+  const recMap = new Map();
+  for (const r of governance) {
+    if (r && r.recommend_ban_count != null && r.ban_count != null && r.ban_count >= r.recommend_ban_count) {
+      const key = `${r.family}|${r.capability}`;
+      const reason = `${r.ban_count} reflexive bans ≥ ${r.recommend_ban_count}`;
+      if (!recMap.has(key)) recMap.set(key, { family: r.family, capability: r.capability, reasons: [] });
+      recMap.get(key).reasons.push(reason);
+    }
+  }
+  for (const r of auditFlags) {
+    if (r && r.recommend_flag_count != null && r.flag_count != null && r.flag_count >= r.recommend_flag_count) {
+      const key = `${r.family}|${r.capability}`;
+      const reason = `${r.flag_count} audit flags ≥ ${r.recommend_flag_count}`;
+      if (!recMap.has(key)) recMap.set(key, { family: r.family, capability: r.capability, reasons: [] });
+      recMap.get(key).reasons.push(reason);
+    }
+  }
+  if (recMap.size > 0) {
+    const sorted = [...recMap.entries()].sort((a, b) =>
+      (a[1].family ?? "").localeCompare(b[1].family ?? "") || (a[1].capability ?? "").localeCompare(b[1].capability ?? ""));
+    for (const [, v] of sorted) {
+      const reasons = v.reasons.join("; ");
+      lines.push(`  ⚑ RECOMMEND PERMANENT BAN — ${v.family} / ${v.capability} (${reasons}); a human must decide.`);
+    }
+  }
+
+  // M22 — Human action trail (newest-first, capped at 10).
+  if (governanceActions.length > 0) {
+    lines.push("  governance actions:");
+    for (const r of governanceActions.slice(0, 10)) {
+      const suffix = r.reason ? ` — ${r.reason}` : "";
+      lines.push(`    - ${r.action} ${r.family} / ${r.capability}${suffix}`);
+    }
   }
 
   return lines.join("\n");
@@ -660,18 +707,23 @@ const COMMANDS = {
     // fetched unfiltered. Degrade gracefully: a substrate without the view (or an
     // error) leaves the record section empty rather than failing the whole report.
     // The governance view (v5) is similarly unfiltered and degrades to [] on error.
-    const [b, t, tr, gov] = await Promise.all([
+    // M22: audit_flags and governance_actions are also unfiltered and degrade to [].
+    const [b, t, tr, gov, af, ga] = await Promise.all([
       restGet(`board?${boardQ}`, token),
       restGet(`timeline?${tlQ}`, token),
       restGet(`family_track_record?order=family.asc,capability.asc`, token),
       restGet(`governance_status?order=family.asc,capability.asc`, token),
+      restGet(`audit_flags?order=family.asc,capability.asc`, token),
+      restGet(`governance_actions?order=created_at.desc`, token),
     ]);
     for (const r of [b, t]) {
       if (!r.httpOk) { emit(r.body ?? { ok: false, code: "http_error", status: r.status }, false); return; }
     }
     const trackRecord = tr.httpOk && Array.isArray(tr.body) ? tr.body : [];
     const governance = gov.httpOk && Array.isArray(gov.body) ? gov.body : [];
-    process.stdout.write(`${formatReport({ board: b.body, timeline: t.body, trackRecord, governance }, { lane })}\n`);
+    const auditFlags = af.httpOk && Array.isArray(af.body) ? af.body : [];
+    const governanceActions = ga.httpOk && Array.isArray(ga.body) ? ga.body : [];
+    process.stdout.write(`${formatReport({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions }, { lane })}\n`);
   },
 
   // record-usage — M20 Slice A: stamp a sweep's TOKEN spend onto the task the actor
