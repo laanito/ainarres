@@ -388,6 +388,69 @@ describe("formatReport", () => {
     expect(out).toContain("family track record");
     expect(out).toContain("governance");
   });
+
+  // ── M22 — Open audit flags, ban recommendations, human action trail ───────
+
+  test("auditFlags renders one line per flag sorted by family then capability", () => {
+    const auditFlags = [
+      { family: "f", capability: "role:designer", flag_count: 2, last_gap: "ignores the spec", last_severity: "critical" },
+    ];
+    const out = formatReport({ board: [], timeline: [], auditFlags });
+    expect(out).toContain("  - f / role:designer: 2 audit flag(s) — ignores the spec");
+  });
+
+  test("permanent-ban recommendation from governance ban_count >= recommend_ban_count", () => {
+    const governance = [
+      { family: "g", capability: "role:implementer", banned: false, ban_count: 4, recommend_ban_count: 3 },
+    ];
+    const out = formatReport({ board: [], timeline: [], governance });
+    expect(out).toContain("⚑ RECOMMEND PERMANENT BAN — g / role:implementer");
+    expect(out).toContain("4 reflexive bans ≥ 3");
+    expect(out).toContain("a human must decide");
+  });
+
+  test("permanent-ban recommendation from auditFlags flag_count >= recommend_flag_count", () => {
+    const auditFlags = [
+      { family: "h", capability: "role:designer", flag_count: 3, recommend_flag_count: 2, last_gap: "x" },
+    ];
+    const out = formatReport({ board: [], timeline: [], auditFlags });
+    expect(out).toContain("⚑ RECOMMEND PERMANENT BAN — h / role:designer");
+    expect(out).toContain("3 audit flags ≥ 2");
+  });
+
+  test("(family, capability) qualifying from BOTH governance and auditFlags prints exactly ONE recommend line with reasons joined by ; ", () => {
+    const governance = [
+      { family: "m", capability: "role:designer", banned: false, ban_count: 5, recommend_ban_count: 3 },
+    ];
+    const auditFlags = [
+      { family: "m", capability: "role:designer", flag_count: 4, recommend_flag_count: 2, last_gap: "y" },
+    ];
+    const out = formatReport({ board: [], timeline: [], governance, auditFlags });
+    // Exactly one line containing RECOMMEND PERMANENT BAN for m / role:designer
+    const lines = out.split("\n").filter(l => l.includes("RECOMMEND PERMANENT BAN — m / role:designer"));
+    expect(lines.length).toBe(1);
+    expect(lines[0]).toContain("5 reflexive bans ≥ 3");
+    expect(lines[0]).toContain("4 audit flags ≥ 2");
+    expect(lines[0]).toContain("; ");
+  });
+
+  test("governanceActions renders action trail, newest-first, capped at 10", () => {
+    const governanceActions = [
+      { family: "f", capability: "role:designer", action: "lift", reason: "reinstated" },
+      { family: "f", capability: "role:designer", action: "ban_permanent", reason: "repeat" },
+    ];
+    const out = formatReport({ board: [], timeline: [], governanceActions });
+    expect(out).toContain("  governance actions:");
+    expect(out).toContain("    - lift f / role:designer — reinstated");
+    expect(out).toContain("    - ban_permanent f / role:designer — repeat");
+  });
+
+  test("formatReport({}) with no flags/recommendations/actions prints none of the new lines", () => {
+    const out = formatReport({});
+    expect(out).not.toContain("audit flag(s)");
+    expect(out).not.toContain("RECOMMEND PERMANENT BAN");
+    expect(out).not.toContain("governance actions:");
+  });
 });
 
 describe("fmtTokens", () => {
