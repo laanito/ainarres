@@ -5,6 +5,7 @@
 # the substrate does that.
 #
 # Cast (v3 tiers + M19 federated frontier peers) in capability order (cheapest first):
+#   nano-implementer           opencode + nemotron-3-nano   role:implementer  (cheapest, tier-0; 1 concurrent session — NEVER pooled)
 #   cheap-implementer          opencode + big-pickle        role:implementer  (primary, free API)
 #   fallback-implementer       opencode + nemotron-3-ultra  role:implementer  (fallback, free API)
 #   designer                   claude-code + opus           role:designer     (one-shot decomposition)
@@ -35,11 +36,14 @@ LOOP_MODE="${LOOP_MODE:-real}"           # real | mock
 RUN_DIR="${RUN_DIR:-$REPO/loop/run}"     # per-tier sweep logs (gitignored)
 
 # Worker tiers, ordered LOW→HIGH capability. The driver sweeps them in this order
-# each round. The two cheap (free-API) tiers each get a turn before a task escalates
-# to the frontier (escalate_after = 2 on the dev implementing stage): big-pickle does
-# the work; the nemotron fallback covers big-pickle being down/depleted AND retries a
-# task it failed; grok is the escalation ceiling.
-LOOP_TIERS=(cheap-implementer fallback-implementer frontier)
+# each round. The cheap (free-API) tiers each get a turn before a task escalates
+# to the frontier (escalate_after = 2 on the dev implementing stage): nano takes the
+# first crack (cheapest), big-pickle does the bulk of the work; the nemotron-ultra
+# fallback covers big-pickle being down/depleted AND retries a task it failed; grok is
+# the escalation ceiling. (Adding a tier ahead means the LAST cheap tier now rarely runs
+# before escalate_after=2 fires — bump the dev implementing stage's escalate_after in the
+# loop seed if you want all three cheap tiers to attempt before grok.)
+LOOP_TIERS=(nano-implementer cheap-implementer fallback-implementer frontier)
 
 # M18 split (ADR 0021): the primary cheap implementer is FANNED OUT into a concurrent
 # pool (LOOP_POOL_SIZE members per round — the swarm's throughput); the remaining tiers
@@ -48,6 +52,14 @@ LOOP_TIERS=(cheap-implementer fallback-implementer frontier)
 # parallel-loop.md D2).
 LOOP_POOL_TIER="${LOOP_POOL_TIER:-cheap-implementer}"
 LOOP_SERIAL_TIERS=(fallback-implementer)
+
+# Tier-0 pre-pass: tiers swept ONCE, serially, BEFORE the concurrent pool each round
+# (driver.sh). nano is the cheapest implementer and drains the easy work it can before
+# big-pickle's pool fans out on the rest. It runs as a SINGLE sweep on purpose — the
+# nemotron-3-nano backend allows only ONE concurrent session, so it must NEVER be the
+# pool tier (a ×LOOP_POOL_SIZE fan-out would collide on the backend). Set to () to drop
+# nano back out and restore the classic v3 ladder (big-pickle pool first).
+LOOP_PRE_TIERS=(nano-implementer)
 
 # M19 federation (design/federation.md): the frontier ROLE is shared by MULTIPLE
 # families as peers, none privileged. These pollers run CONCURRENTLY each round (after
@@ -63,6 +75,7 @@ LOOP_FRONTIER_PEERS=(frontier frontier-claude-reviewer)
 # the run. In mock mode the frontier drops implementer/tier:2 (see header).
 role_features() {
   case "$1" in
+    nano-implementer)     echo "lane:dev,role:implementer" ;;  # tier-0: same role, cheapest model
     cheap-implementer)    echo "lane:dev,role:implementer" ;;
     fallback-implementer) echo "lane:dev,role:implementer" ;;  # same role, different (free-API) model
     frontier)
@@ -81,6 +94,7 @@ role_features() {
 # Agent family (harness+model) for a poller — the durable identity (ADR 0007).
 role_family() {
   case "$1" in
+    nano-implementer)         echo "opencode+nemotron-3-nano" ;;   # tier-0: cheapest implementer (1 concurrent session)
     cheap-implementer)        echo "opencode+big-pickle" ;;        # primary cheap implementer (free API)
     fallback-implementer)     echo "opencode+nemotron-3-ultra" ;;  # fallback (free API, more capable)
     designer)                 echo "claude-code+opus" ;;           # M19: opus for design judgment
@@ -115,6 +129,11 @@ harness_sweep() {
   # Both cheap tiers run the same opencode wrapper with a different (free-API) model.
   # Override the *_MODEL / *_CMD vars to swap models or invocation.
   case "$poller" in
+    nano-implementer)
+      # tier-0 cheapest: nemotron-3-nano via opencode's ollama provider. ONE concurrent
+      # session only — the driver runs this as a single serial pre-pool sweep, never pooled.
+      OPENCODE_MODEL="${OPENCODE_NANO_MODEL:-ollama/nemotron-3-nano:30b-cloud}" \
+        eval "${OPENCODE_NANO_CMD:-bash \"$REPO/loop/opencode-implementer.sh\"}" ;;
     cheap-implementer)
       OPENCODE_MODEL="${OPENCODE_PRIMARY_MODEL:-opencode/big-pickle}" \
         eval "${OPENCODE_IMPLEMENTER_CMD:-bash \"$REPO/loop/opencode-implementer.sh\"}" ;;

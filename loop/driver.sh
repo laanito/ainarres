@@ -262,11 +262,19 @@ read -r SEEDED_TOTAL _ <<<"$(board_total)"
 #    OR the board drains. Termination is unchanged in spirit: board empty AND no
 #    sweep in flight (run_pool/run_sweep both reap before returning, so when the round
 #    body finishes nothing is running — D4).
-echo "→ driver: pool=${LOOP_POOL_SIZE}× '${LOOP_POOL_TIER}' per round; serial: ${LOOP_SERIAL_TIERS[*]}; frontier peers: ${LOOP_FRONTIER_PEERS[*]}"
+echo "→ driver: pre-pool: ${LOOP_PRE_TIERS[*]:-(none)}; pool=${LOOP_POOL_SIZE}× '${LOOP_POOL_TIER}' per round; serial: ${LOOP_SERIAL_TIERS[*]}; frontier peers: ${LOOP_FRONTIER_PEERS[*]}"
 round=0
 while true; do
   round=$((round + 1))
   before="$(board_sig)"
+  # Tier-0 pre-pass: the cheapest implementer(s) drain what they can BEFORE the pool
+  # fans out (roles.sh::LOOP_PRE_TIERS). Single serial sweeps — a backend limited to one
+  # concurrent session (nano) belongs here, never in the ×LOOP_POOL_SIZE pool.
+  for tier in "${LOOP_PRE_TIERS[@]:-}"; do
+    [ -n "$tier" ] || continue
+    echo "→ round $round: pre-pool tier '$tier' sweeping…"
+    run_sweep "$tier" || echo "  (pre-pool tier '$tier' sweep exited non-zero — continuing)"
+  done
   echo "→ round $round: ${LOOP_POOL_SIZE} concurrent '${LOOP_POOL_TIER}' implementers…"
   run_pool "$LOOP_POOL_TIER" "$LOOP_POOL_SIZE"
   for tier in "${LOOP_SERIAL_TIERS[@]}"; do

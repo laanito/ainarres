@@ -34,7 +34,7 @@ ai() { "${AINARRES[@]}" "$@"; }
 # git worktree (teardown on exit). `ai` resolves the CLI via BASH_SOURCE, so working
 # from the worktree is fine. Non-implementer pollers (designer/frontier) work in $REPO.
 case "$POLLER" in
-  cheap-implementer|fallback-implementer)
+  nano-implementer|cheap-implementer|fallback-implementer)
     if [ -n "${LOOP_SWEEP_ID:-}" ]; then
       WT="$(bash "$REPO/loop/worktree.sh" enter "$LOOP_SWEEP_ID")"
       trap 'bash "$REPO/loop/worktree.sh" teardown "$LOOP_SWEEP_ID" >/dev/null 2>&1 || true' EXIT
@@ -86,7 +86,7 @@ while true; do
   case "$POLLER:$stage" in
     designer:proposed)      ai advance "$id" --to designing   --note "mock: design start" >/dev/null ;;
     designer:designing)     ai advance "$id" --to implementing --note "mock: spec ready"  >/dev/null ;;
-    cheap-implementer:implementing|fallback-implementer:implementing)
+    nano-implementer:implementing|cheap-implementer:implementing|fallback-implementer:implementing)
                             ai advance "$id" --to reviewing    --note "mock: implemented" --branch "dev/$id" >/dev/null ;;
     # M19: reviewing/validating are FEDERATED — grok OR the claude reviewer peer may own
     # them (SKIP LOCKED gives each concurrent sweep a distinct task; cross-family review

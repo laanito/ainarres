@@ -23,6 +23,7 @@ loop/
 
 | Tier / peer | Harness / family | Role(s) |
 |---|---|---|
+| `nano-implementer` | `opencode + nemotron-3-nano` | implementer (tier-0, cheapest; **1 concurrent session — never pooled**) |
 | `cheap-implementer` | `opencode + big-pickle` (free API) | implementer (primary) |
 | `fallback-implementer` | `opencode + nemotron-3-ultra` (free API) | implementer (fallback) |
 | `designer` | `claude-code + opus` | designer (one-shot decomposition) |
@@ -30,8 +31,10 @@ loop/
 | `frontier-claude-reviewer` | `claude-code + sonnet` | reviewer (M19 peer, **never** integrates) |
 
 The driver sweeps the tiers **in this order, in rounds** (`roles.sh::LOOP_TIERS`).
-Because each cheap tier runs to "nothing claimable" *before* the next runs, big-pickle
-claims `implementing` work first; the **fallback** (nemotron-3-ultra; swap via
+Because each cheap tier runs to "nothing claimable" *before* the next runs, the
+**tier-0** `nano-implementer` (nemotron-3-nano) takes first crack at the easy
+`implementing` work; big-pickle's pool then fans out on the rest; the **fallback**
+(nemotron-3-ultra; swap via
 `OPENCODE_FALLBACK_MODEL`) covers big-pickle being down/depleted **and** retries a task
 it failed — both before the task escalates. The frontier only picks up what's left:
 review/integrate, and M12-escalated tasks the cheap tiers couldn't finish (`tier:2`).
@@ -48,7 +51,11 @@ tasks at once without colliding: (1) its own **M17 git worktree** (`LOOP_SWEEP_I
 shared `auth.json` symlinked in. The opencode isolation is load-bearing: opencode keeps
 its session SQLite at `$XDG_DATA_HOME/opencode/opencode.db`, and concurrent opencode
 processes sharing it collide (`database is locked`) — the first real gate run collapsed
-the pool to one live worker for exactly this reason. This is the swarm's throughput. The remaining tiers (`LOOP_SERIAL_TIERS` = fallback, frontier)
+the pool to one live worker for exactly this reason. This is the swarm's throughput. Ahead of the
+pool each round, any **tier-0 pre-pass** tiers (`roles.sh::LOOP_PRE_TIERS` — the
+`nano-implementer` today) run once, serially: the cheapest model drains what it can
+before big-pickle fans out. A backend limited to **one concurrent session** (nano) lives
+here, never in the ×`LOOP_POOL_SIZE` pool, which would collide on it. The remaining tiers (`LOOP_SERIAL_TIERS` = fallback, frontier)
 still run once each, serially, after the pool. **Integration stays single**: the lone
 frontier integrator drains `integrating` FIFO, rebasing on the latest default branch +
 re-validating before each merge — it *is* the merge queue (parallel-loop.md D2), which

@@ -369,6 +369,25 @@ join app.features ft on ft.name = any (array['lane:dev', 'role:implementer'])
 where f.key in ('opencode+nemotron-3-ultra', 'opencode+nemotron-3-super')
 on conflict (family_id, feature_id) do nothing;
 
+-- ── Roster: opencode + nemotron-3-nano (tier-0 cheapest implementer) ──────────
+-- The cheapest implementer, reached through opencode's ollama provider (Ollama's
+-- cloud passthrough): `-m ollama/nemotron-3-nano:30b-cloud`. Holds role:implementer
+-- on lane:dev, NOT capability:frontier/tier:2. The loop runs it as a tier-0 SERIAL
+-- pre-pass ahead of big-pickle's pool (loop/roles.sh::LOOP_PRE_TIERS): its backend
+-- allows only ONE concurrent session, so it must never be fanned out into the pool.
+-- A family must be registered here to be eligible to claim ("unknown family" ⇒
+-- not_eligible) — a valid token's features alone are not enough (ADR 0007).
+insert into app.agent_families (key, description) values
+  ('opencode+nemotron-3-nano', 'opencode/ollama, nemotron-3-nano:30b-cloud — tier-0 cheapest implementer (1 concurrent session)')
+on conflict (key) do nothing;
+
+insert into app.family_features (family_id, feature_id)
+select f.id, ft.id
+from app.agent_families f
+join app.features ft on ft.name = any (array['lane:dev', 'role:implementer'])
+where f.key = 'opencode+nemotron-3-nano'
+on conflict (family_id, feature_id) do nothing;
+
 -- ── M12: capability escalation (ADR 0019, ordered tiers) ─────────────────────
 -- tier:2 is the frontier rung (base implementer work needs no tier feature). The
 -- frontier implementer / escalation target is grok+grok-build: it already integrates;
