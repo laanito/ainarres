@@ -14,6 +14,7 @@ loop/
   grok-frontier.sh         real frontier harness wrapper (grok; reviewer + the SINGLE integrator + escalated impl)
   claude-frontier.sh       real frontier PEER wrapper (M19; claude — opus designer / sonnet reviewer, never integrates)
   opencode-implementer.sh  real cheap-implementer harness wrapper (opencode; isolates in a worktree)
+  cursor-implementer.sh    real fallback-implementer wrapper (cursor-agent + composer-2.5; serial, worktree-isolated)
   mock-harness.sh          deterministic stand-in (LOOP_MODE=mock) for the plumbing test
   examples/                feature briefs (incl. parallel-gate-brief.txt — the M18 gate)
   run/                     per-sweep logs + worktree sentinels (gitignored)
@@ -25,6 +26,7 @@ loop/
 |---|---|---|
 | `nano-implementer` | `opencode + nemotron-3-nano` | implementer (tier-0, cheapest; **1 concurrent session — never pooled**) |
 | `cheap-implementer` | `opencode + big-pickle` (free API) | implementer (primary) |
+| `cursor-implementer` | `cursor-agent + composer-2.5` | implementer (fallback, higher quality; not frontier) |
 | `fallback-implementer` | `opencode + nemotron-3-ultra` (free API) | implementer (fallback) |
 | `designer` | `claude-code + opus` | designer (one-shot decomposition) |
 | `frontier` | `grok + grok-build` | reviewer + the **single integrator** + **escalated** implementer (`tier:2`) |
@@ -33,10 +35,12 @@ loop/
 The driver sweeps the tiers **in this order, in rounds** (`roles.sh::LOOP_TIERS`).
 Because each cheap tier runs to "nothing claimable" *before* the next runs, the
 **tier-0** `nano-implementer` (nemotron-3-nano) takes first crack at the easy
-`implementing` work; big-pickle's pool then fans out on the rest; the **fallback**
+`implementing` work; big-pickle's pool then fans out on the rest; then the serial
+**fallbacks** — first `cursor-implementer` (cursor-agent + composer-2.5, a
+higher-quality non-frontier tier) and behind it `fallback-implementer`
 (nemotron-3-ultra; swap via
-`OPENCODE_FALLBACK_MODEL`) covers big-pickle being down/depleted **and** retries a task
-it failed — both before the task escalates. The frontier only picks up what's left:
+`OPENCODE_FALLBACK_MODEL`) — cover an earlier tier being down/depleted **and** retry a
+task it failed, both before the task escalates. The frontier only picks up what's left:
 review/integrate, and M12-escalated tasks the cheap tiers couldn't finish (`tier:2`).
 The dev `implementing` stage uses `escalate_after = 2`, so both cheap tiers get an
 attempt before grok. (The local `qwen3.6` was dropped: it implemented correctly but
@@ -55,7 +59,7 @@ the pool to one live worker for exactly this reason. This is the swarm's through
 pool each round, any **tier-0 pre-pass** tiers (`roles.sh::LOOP_PRE_TIERS` — the
 `nano-implementer` today) run once, serially: the cheapest model drains what it can
 before big-pickle fans out. A backend limited to **one concurrent session** (nano) lives
-here, never in the ×`LOOP_POOL_SIZE` pool, which would collide on it. The remaining tiers (`LOOP_SERIAL_TIERS` = fallback, frontier)
+here, never in the ×`LOOP_POOL_SIZE` pool, which would collide on it. The remaining tiers (`LOOP_SERIAL_TIERS` = cursor-implementer, fallback-implementer, then the frontier peers)
 still run once each, serially, after the pool. **Integration stays single**: the lone
 frontier integrator drains `integrating` FIFO, rebasing on the latest default branch +
 re-validating before each merge — it *is* the merge queue (parallel-loop.md D2), which
@@ -103,10 +107,12 @@ make loop-up && make loop-seed          # bring up the isolated loop substrate (
 make loop-run BRIEF=path/to/feature-brief.txt
 ```
 
-The harness wrappers (`grok-frontier.sh`, `opencode-implementer.sh`) resolve their
-binaries themselves (no PATH wiring needed); override with `GROK_FRONTIER_CMD` /
-`OPENCODE_IMPLEMENTER_CMD` (or `GROK_BIN`/`OPENCODE_BIN`, `*_MODEL`) to swap in a
-different invocation. Per-tier sweep logs stream to `loop/run/<tier>.log`.
+The harness wrappers (`grok-frontier.sh`, `opencode-implementer.sh`,
+`cursor-implementer.sh`) resolve their binaries themselves (no PATH wiring needed);
+override with `GROK_FRONTIER_CMD` / `OPENCODE_IMPLEMENTER_CMD` / `CURSOR_IMPLEMENTER_CMD`
+(or `GROK_BIN`/`OPENCODE_BIN`/`CURSOR_BIN`, `*_MODEL`) to swap in a different invocation.
+`cursor-agent` authenticates via `CURSOR_API_KEY` (or a prior `cursor-agent login`).
+Per-tier sweep logs stream to `loop/run/<tier>.log`.
 
 ## Prove the plumbing (deterministic, no LLMs)
 
