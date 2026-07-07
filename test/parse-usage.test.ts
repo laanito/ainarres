@@ -4,8 +4,8 @@ import { parseUsage } from "../bin/ainarres.mjs";
 // M20 Slice A (design/track-record.md D1/D3). The driver-side per-family token parser
 // — pure, no I/O. The load-bearing property: an UNKNOWN harness shape returns null,
 // never zeroes, so a family we cannot measure reads as "unknown" (the view LEFT JOINs
-// → NULL), never as "free". Today only the claude families emit a parseable shape;
-// opencode and grok print no token JSON and MUST degrade to null. Tokens only — the
+// → NULL), never as "free". claude, opencode, cursor-agent, and grok all have
+// parseable shapes; an unrecognised family still degrades to null. Tokens only — the
 // harness's total_cost_usd is deliberately dropped (D3).
 
 // A representative compact claude `--output-format json` result line.
@@ -62,7 +62,7 @@ describe("parseUsage — the per-family token parser", () => {
     expect(parseUsage("commit only bin/lib/x.mjs\nrun the loop until empty\n", "opencode+big-pickle")).toBeNull();
   });
 
-  it("returns null for grok — its JSON carries no usage (unknown ≠ free)", () => {
+  it("returns null for grok when log has no _meta/inputTokens (unknown ≠ free)", () => {
     const grok = JSON.stringify({ text: "Loop completed: no more work on the dev lane." });
     expect(parseUsage(grok, "grok+grok-build")).toBeNull();
   });
@@ -203,5 +203,81 @@ describe("parseUsage — the per-family token parser", () => {
   it("returns null for an opencode-shaped log with cursor-agent family (no top-level usage)", () => {
     // opencode has part.tokens, not top-level usage — must not be recognized
     expect(parseUsage(opencodeLog, "cursor-agent+composer-2.5")).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------------
+  // grok family — debug log lines with embedded JSON containing _meta.
+  // inputTokens INCLUDES cachedReadTokens; fresh input = inputTokens - cachedRead.
+  // ---------------------------------------------------------------------------
+
+  // A representative grok debug log line (from the grok harness).
+  const grokLine =
+    '2026-07-07T17:16:30Z DEBUG xai_acp_lib::gateway: received "session/prompt" response: ' +
+    JSON.stringify({
+      stopReason: "end_turn",
+      _meta: {
+        totalTokens: 58050,
+        modelId: "grok-build",
+        inputTokens: 57574,
+        outputTokens: 475,
+        cachedReadTokens: 57344,
+        reasoningTokens: 49,
+      },
+    });
+
+  it("extracts grok tokens from a debug log line, computing fresh input = inputTokens - cachedReadTokens", () => {
+    const u = parseUsage(grokLine, "grok+grok-build");
+    expect(u).not.toBeNull();
+    expect(u!.tokens).toEqual({
+      input: 230,       // 57574 - 57344
+      output: 475,
+      cache_read: 57344,
+      cache_creation: 0,
+    });
+    expect(u!.model).toBe("grok-build");
+  });
+
+  it("takes the LAST grok _meta line when multiple exist (reviewer sweep then integrator sweep)", () => {
+    const earlierMeta = {
+      _meta: { totalTokens: 100, modelId: "grok-build", inputTokens: 80, outputTokens: 20, cachedReadTokens: 50 },
+    };
+    const laterMeta = {
+      _meta: {
+        totalTokens: 58050, modelId: "grok-build", inputTokens: 57574, outputTokens: 475,
+        cachedReadTokens: 57344, reasoningTokens: 49,
+      },
+    };
+    const log = [
+      `2026 DEBUG some noise: ${JSON.stringify(earlierMeta)}`,
+      "some interleaved non-JSON text",
+      `2026 DEBUG response: ${JSON.stringify(laterMeta)}`,
+    ].join("\n");
+    const u = parseUsage(log, "grok+grok-build");
+    expect(u).not.toBeNull();
+    expect(u!.tokens).toEqual({
+      input: 230,       // 57574 - 57344
+      output: 475,
+      cache_read: 57344,
+      cache_creation: 0,
+    });
+  });
+
+  it("returns null for a plain log with no JSON for grok family", () => {
+    expect(parseUsage("2026 DEBUG some other line\nnot json\n", "grok+grok-build")).toBeNull();
+  });
+
+  it("returns null for a claude-shaped log with grok family (no _meta)", () => {
+    // claudeResult has snake_case usage, not _meta — must not be recognized as grok
+    expect(parseUsage(claudeResult, "grok+grok-build")).toBeNull();
+  });
+
+  it("returns null for an opencode-shaped log with grok family (no _meta)", () => {
+    // opencode has step_finish events with part.tokens — must not be recognized as grok
+    expect(parseUsage(opencodeLog, "grok+grok-build")).toBeNull();
+  });
+
+  it("returns null for a cursor-shaped log with grok family (no _meta)", () => {
+    // cursor has top-level usage with inputTokens but no _meta — must not be recognized
+    expect(parseUsage(cursorLog, "grok+grok-build")).toBeNull();
   });
 });
