@@ -29,7 +29,9 @@ Work this loop, one task at a time, until a claim returns `"code":"empty"`:
    - Otherwise note `task.id` and read `task.payload`: `goal`, `instructions`, `files`,
      `validate` (a shell command that must exit 0 when correct), `acceptance`.
 
-2. Branch: `git checkout -b dev/<task.id>` (off the default branch).
+2. Branch: `git checkout -b dev/<task.id>-$LOOP_SWEEP_ID` (off the default branch). The
+   `-$LOOP_SWEEP_ID` suffix (exported per worker by the loop) keeps two workers that race
+   the same task from colliding on the remote ref. Use this SAME name below.
 
 3. Implement exactly what `instructions` says, creating/editing `files`. Write the tests
    the change needs.
@@ -39,8 +41,8 @@ Work this loop, one task at a time, until a claim returns `"code":"empty"`:
    - Still failing → `node bin/ainarres.mjs release <task.id> --reason "could not satisfy validate"`, then go to step 1.
 
 5. Push and hand to review (only after validate exits 0):
-   `git add -A && git commit -m "<goal>" && git push -u origin dev/<task.id>`
-   `node bin/ainarres.mjs advance <task.id> --to reviewing --note "validate passes" --branch dev/<task.id>`
+   `git add -A && git commit -m "<goal>" && git push -u origin dev/<task.id>-$LOOP_SWEEP_ID`
+   `node bin/ainarres.mjs advance <task.id> --to reviewing --note "validate passes" --branch dev/<task.id>-$LOOP_SWEEP_ID`
 
 6. Go to step 1.
 
@@ -51,5 +53,5 @@ Rules:
 - Write files ONLY inside the repository, at the exact paths the task names. NEVER write to
   /tmp or any path outside the project — the work product is the change on your branch.
 - `"code":"lease_lost"` → you lost the task; go to step 1.
-- You push only your own `dev/<task.id>` branch. You do NOT push to the default branch or
+- You push only your own `dev/<task.id>-$LOOP_SWEEP_ID` branch. You do NOT push to the default branch or
   open PRs — that is the integrator's job. Do not ask the user questions; work the queue.

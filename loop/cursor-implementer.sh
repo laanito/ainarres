@@ -23,7 +23,7 @@ cd "$REPO"
 : "${AINARRES_BASE_URL:?cursor-implementer: AINARRES_BASE_URL must be set (from loop.env)}"
 
 # Per-sweep git worktree isolation (M17): if the driver handed us a sweep id, work in our
-# own checkout so the agent's per-task `loop/<id>` branches and edits don't touch the main
+# own checkout so the agent's per-task `dev/<id>-<sweep>` branches and edits don't touch the main
 # tree; teardown on exit. Serial tier ⇒ no concurrent-state isolation needed (see header).
 if [ -n "${LOOP_SWEEP_ID:-}" ]; then
   WT="$(bash "$REPO/loop/worktree.sh" enter "$LOOP_SWEEP_ID")"
@@ -61,7 +61,8 @@ Then run this loop until done:
   1. node bin/ainarres.mjs claim --lane dev
   2. if code is "empty" -> stop; you are done.
   3. otherwise implement the claimed task per the skill and its payload, doing the REAL
-     work: make the code change on the task's `loop/<id>` branch, run the task's
+     work: make the code change on the task's own branch (per the skill:
+     `dev/<task.id>-$LOOP_SWEEP_ID`, unique to this attempt), run the task's
      SUBSTRATE-FREE validate yourself, then advance the task per the skill (or reject with
      a reason if you cannot complete it). Heartbeat long work.
   4. go to 1.

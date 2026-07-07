@@ -61,9 +61,16 @@ LOOP_SERIAL_TIERS=(cursor-implementer fallback-implementer)
 # (driver.sh). nano is the cheapest implementer and drains the easy work it can before
 # big-pickle's pool fans out on the rest. It runs as a SINGLE sweep on purpose — the
 # nemotron-3-nano backend allows only ONE concurrent session, so it must NEVER be the
-# pool tier (a ×LOOP_POOL_SIZE fan-out would collide on the backend). Set to () to drop
-# nano back out and restore the classic v3 ladder (big-pickle pool first).
-LOOP_PRE_TIERS=(nano-implementer)
+# pool tier (a ×LOOP_POOL_SIZE fan-out would collide on the backend).
+#
+# DISABLED 2026-07-07: nemotron-3-nano kept hallucinating a `str_replace_editor` tool
+# (not in opencode's toolset: bash/edit/glob/grep/read/skill/task/todowrite/write) and
+# looped on the rejection, holding a task's 2h lease while making zero progress — until
+# the lease lapsed and a real tier reclaimed it (a wasted-work lease race). A tier-0 that
+# can't drive the harness's actual tools is worse than none. The nano wiring (family seed,
+# role_family/role_features/harness_sweep) stays as a template; set this back to
+# (nano-implementer) with a tooling-capable OPENCODE_NANO_MODEL to re-enable.
+LOOP_PRE_TIERS=()
 
 # M19 federation (design/federation.md): the frontier ROLE is shared by MULTIPLE
 # families as peers, none privileged. These pollers run CONCURRENTLY each round (after
