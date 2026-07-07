@@ -82,4 +82,63 @@ describe("parseUsage — the per-family token parser", () => {
     expect(u!.tokens).toEqual({ input: 10, output: 5, cache_read: null, cache_creation: null });
     expect(u!.model).toBeNull();
   });
+
+  // ---------------------------------------------------------------------------
+  // opencode family — JSON event stream with step_finish events carrying
+  // part.tokens.  Build from three real event lines interleaved with unrelated
+  // events and one malformed line to prove they are skipped.
+  // ---------------------------------------------------------------------------
+
+  // prettier-ignore
+  const opencodeLineA = JSON.stringify({
+    type: "step_finish", ts: "2026-07-07T17:07:18Z",
+    part: { type: "step-finish", tokens: { total: 7858, input: 7790, output: 44, reasoning: 24, cache: { write: 0, read: 0 } }, cost: 0 },
+  });
+  // prettier-ignore
+  const opencodeLineB = JSON.stringify({
+    type: "step_finish", ts: "2026-07-07T17:07:20Z",
+    part: { type: "step-finish", tokens: { total: 7925, input: 64, output: 44, reasoning: 9, cache: { write: 0, read: 7808 } }, cost: 0 },
+  });
+  // prettier-ignore
+  const opencodeLineC = JSON.stringify({
+    type: "step_finish", ts: "2026-07-07T17:07:22Z",
+    part: { type: "step-finish", tokens: { total: 7952, input: 131, output: 3, reasoning: 10, cache: { write: 0, read: 7808 } }, cost: 0 },
+  });
+
+  const opencodeLog = [
+    opencodeLineA,
+    `{"type":"step_start","ts":"2026-07-07T17:07:18Z","step":1}`,
+    // malformed JSON — must be skipped without throwing
+    '{"type":"step_finish","part":{"tokens":{"total":100}',
+    opencodeLineB,
+    `{"type":"think","ts":"2026-07-07T17:07:19Z","content":"reasoning..."}`,
+    opencodeLineC,
+  ].join("\n");
+
+  it("aggregates opencode step_finish token events across the whole log", () => {
+    const u = parseUsage(opencodeLog, "opencode+big-pickle");
+    expect(u).not.toBeNull();
+    expect(u!.tokens).toEqual({
+      input: 7985,       // 7790 + 64 + 131
+      output: 134,       // (44+44+3) + (24+9+10)
+      cache_read: 15616, // 0 + 7808 + 7808
+      cache_creation: 0, // 0 + 0 + 0
+    });
+    expect(u!.model).toBeNull();
+  });
+
+  it("returns null for opencode log with no step_finish events", () => {
+    expect(parseUsage("not json\n{oops\n", "opencode+qwen3-coder-next")).toBeNull();
+  });
+
+  // The two existing opencode-family null tests (line 58-63) still pass:
+  // claudeResult has type "result" not "step_finish", and the plain-text log
+  // has no JSON at all — both must still return null for opencode families.
+  it("still returns null for claude-shaped log with opencode family (no step_finish)", () => {
+    expect(parseUsage(claudeResult, "opencode+big-pickle")).toBeNull();
+  });
+
+  it("still returns null for plain-text log with opencode family", () => {
+    expect(parseUsage("commit only bin/lib/x.mjs\nrun the loop until empty\n", "opencode+big-pickle")).toBeNull();
+  });
 });

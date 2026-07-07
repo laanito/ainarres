@@ -560,10 +560,16 @@ export function secondsToExpiry(token, nowSeconds) {
 // they degrade to null by design. Tokens only — the harness's total_cost_usd is
 // deliberately dropped (USD is a UI-level translation — D3).
 export function parseUsage(logText, family) {
-  if (!family || !/^claude-code\+/.test(family)) return null; // only the claude shape is parseable today
-  // claude `--output-format json` prints compact JSON; the final result object has a
-  // top-level `usage` (snake_case token fields) and a per-model `modelUsage`. Scan
-  // lines, keep the LAST object carrying a numeric usage.input_tokens.
+  if (!family) return null;
+  if (/^claude-code\+/.test(family)) return parseClaudeUsage(logText);
+  if (/^opencode\+/.test(family)) return parseOpencodeUsage(logText);
+  return null;
+}
+
+// claude `--output-format json` prints compact JSON; the final result object has a
+// top-level `usage` (snake_case token fields) and a per-model `modelUsage`. Scan
+// lines, keep the LAST object carrying a numeric usage.input_tokens.
+function parseClaudeUsage(logText) {
   let best = null;
   for (const line of logText.split("\n")) {
     const t = line.trim();
@@ -591,6 +597,30 @@ export function parseUsage(logText, family) {
     }
   }
   return { tokens, model };
+}
+
+// opencode harness emits a JSON-event stream, one object per line. Step-finish events
+// carry per-step token counts (part.tokens). Scan all lines, sum across every
+// step_finish event that has part.tokens, and return aggregated totals.
+function parseOpencodeUsage(logText) {
+  let input = 0, output = 0, cacheRead = 0, cacheCreation = 0;
+  let found = false;
+  for (const line of logText.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    let obj;
+    try { obj = JSON.parse(t); } catch { continue; }
+    if (!obj || obj.type !== "step_finish") continue;
+    const pt = obj.part?.tokens;
+    if (!pt || typeof pt !== "object") continue;
+    input += pt.input ?? 0;
+    output += (pt.output ?? 0) + (pt.reasoning ?? 0);
+    cacheRead += pt.cache?.read ?? 0;
+    cacheCreation += pt.cache?.write ?? 0;
+    found = true;
+  }
+  if (!found) return null;
+  return { tokens: { input, output, cache_read: cacheRead, cache_creation: cacheCreation }, model: null };
 }
 
 const COMMANDS = {
