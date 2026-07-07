@@ -1,0 +1,82 @@
+Give `ainarres status` a machine-readable `--json` mode: emit the same board/feed/abandoned
+snapshot as a single structured JSON object (for scripting and tooling), computed by a NEW
+PURE function `statusJson(...)`. This mirrors the `--compact` slice already on main: a pure
+shaping function plus a one-flag CLI wiring — no consequence, no auth path, no DB migration.
+It is fully SUBSTRATE-FREE to validate (a vitest unit test, no database).
+
+NOTE — this brief is SINGLE-USE: the run ships its task to `main`, so a re-run needs a
+fresh brief whose work isn't already on main.
+
+WHAT EXISTS TODAY (read before coding; do NOT change the default behavior):
+- bin/ainarres.mjs exports the PURE, total `formatStatus({ board = [], feed = [],
+  abandoned = [] }, { lane = null, feedLimit = 10 } = {})` (around line 107) — the HUMAN
+  text renderer, recently given a `compact` option. Its unit tests live in
+  test/status-format.test.ts (mock rows, no substrate).
+- The derived counts are computed exactly as: blocked = board rows with `blocked === true`;
+  claimed = board rows with `claimed_by != null`; active = board rows with
+  `claimed_by != null && abandoned !== true`; abandoned = the LENGTH of the separate
+  `abandoned` input array. Per-stage counts come from grouping board rows by `row.stage`.
+- The `status` command handler (async status, ~line 665) fetches board/timeline/abandoned
+  and calls `formatStatus({...}, { lane, feedLimit, compact })`. The `events` command
+  already has a `json: { type: "boolean" }` flag in the per-command `options` map
+  (line ~804: `status: { lane, limit, watch, interval, compact, token }` — note it has NO
+  `json` yet) and boolean flags are read as `values.<flag>`.
+
+THE FEATURE — ONE TASK (no DB migration; a NEW pure function + one CLI flag):
+
+1. Add a NEW exported PURE, total function
+   `statusJson({ board = [], feed = [], abandoned = [] } = {}, { lane = null, feedLimit = 10 } = {})`
+   to bin/ainarres.mjs (near `formatStatus`). It returns a PLAIN OBJECT (no I/O, no clock,
+   never throws on empty/partial input) with EXACTLY these keys:
+     - `lane`:      the lane string, or null.
+     - `total`:     board.length (number).
+     - `stages`:    an object mapping each stage key present in board → its count (number).
+                    Empty object `{}` when the board is empty. Only stages that appear.
+     - `blocked`:   count of board rows with `blocked === true` (number).
+     - `claimed`:   count of board rows with `claimed_by != null` (number).
+     - `active`:    count of board rows with `claimed_by != null && abandoned !== true`.
+     - `abandoned`: the length of the `abandoned` input array (number) — NOT a board filter.
+     - `recentEvents`: an array of the first `feedLimit` items of `feed` (already newest-
+                    first), each mapped to `{ at, type, task, by }` where
+                    at = ev.created_at, type = ev.type, task = ev.task_id,
+                    by = ev.family ?? ev.actor ?? null. Empty array when feed is empty.
+
+2. Wire the CLI: add `json: { type: "boolean" }` to the `status` entry in the `options`
+   map. In the status handler, when `values.json` is set, print
+   `JSON.stringify(statusJson({ board, feed, abandoned }, { lane, feedLimit }), null, 2)`
+   followed by a newline INSTEAD of the human text — a single print (no `--watch` loop
+   needed for JSON; if both are passed, `--json` wins and prints once). Reuse the handler's
+   existing fetched rows; degrade on an http error exactly as the text path already does.
+   (This fetch/handler wiring is not part of the substrate-free test — mirror how the
+   handler passes fetched rows into the pure formatter today; the ACCEPTANCE below tests
+   the PURE `statusJson`, which is where the logic lives.)
+
+ACCEPTANCE — add assertions to test/status-format.test.ts (import `statusJson` alongside
+`formatStatus`). They must FAIL on current main (no `statusJson` export) and PASS after:
+- Given a board of one `designing`, two `done`, and one `implementing` task where the
+  implementing task has `claimed_by` set and `abandoned` not true, no blocked tasks, an
+  empty feed, and an empty `abandoned` array,
+  `statusJson({ board }, { lane: "dev" })` deep-equals:
+    { lane: "dev", total: 4, stages: { designing: 1, done: 2, implementing: 1 },
+      blocked: 0, claimed: 1, active: 1, abandoned: 0, recentEvents: [] }
+- `statusJson()` (no args) deep-equals:
+    { lane: null, total: 0, stages: {}, blocked: 0, claimed: 0, active: 0, abandoned: 0,
+      recentEvents: [] }
+- Given a board with one `blocked === true` task and an `abandoned` input array of length 2,
+  the result has `blocked: 1` and `abandoned: 2`.
+- Given a `feed` of 12 events and `feedLimit: 10`, `recentEvents` has length 10 and its
+  first item equals `{ at, type, task, by }` mapped from the first feed row (with
+  `by` = family ?? actor ?? null).
+- `JSON.stringify(statusJson({}))` parses back to the empty-shape object above (it is valid
+  JSON — no undefined values, no functions).
+
+VALIDATE (substrate-free — the ONLY validate; needs NO database, NO docker, NO make, NO
+psql. Run it verbatim; it must fail on main and pass after your change):
+    npx vitest run test/status-format.test.ts
+
+CONSTRAINTS:
+- No DB migration. No new view. No new fetch. Do NOT change any verb, view, or auth path,
+  and do NOT change `formatStatus` or the existing text/`--compact` output.
+- Keep `statusJson` PURE and TOTAL. Do not make it fetch anything — the handler passes rows
+  in (mirror the `formatStatus` wiring precisely).
+- JavaScript only (bin/ainarres.mjs is ESM); tests are vitest in test/status-format.test.ts.

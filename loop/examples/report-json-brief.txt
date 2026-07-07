@@ -1,0 +1,90 @@
+Give `ainarres report` a machine-readable `--json` mode: emit the end-of-run report as a
+single structured JSON object (what shipped, who implemented/reviewed/integrated it, the
+track record and governance sections), computed by a NEW PURE function `reportJson(...)`.
+This mirrors the `status --json` slice already on main: a pure shaping function plus a
+one-flag CLI wiring — no consequence, no auth path, no DB migration. It is fully
+SUBSTRATE-FREE to validate (a vitest unit test, no database).
+
+NOTE — this brief is SINGLE-USE: the run ships its task to `main`, so a re-run needs a
+fresh brief whose work isn't already on main.
+
+WHAT EXISTS TODAY (read before coding; do NOT change the default behavior):
+- bin/ainarres.mjs exports the PURE, total `formatReport({ board = [], timeline = [],
+  trackRecord = [], governance = [], auditFlags = [], governanceActions = [] } = {},
+  { lane = null } = {})` (around line 317) — the HUMAN text renderer. Its unit tests live in
+  test/status-format.test.ts (mock board + timeline rows, no substrate).
+- Inside formatReport are two PURE derivations you should REUSE (extract them to
+  module-scope helpers shared by both functions, or replicate their exact logic):
+    - `prFor(taskId)` — the newest-first PR url from a task's transition artifacts
+      (`ev.data.artifacts` entry with `type === "pr"` and a `url`), else null.
+    - `familyOfTransition(timeline, taskId, from, to)` (already module-scope, line ~285) —
+      the acting family string for a task's `from → to` transition, or null.
+  formatReport computes, per shipped task: implemented = familyOfTransition(…, "implementing",
+  "reviewing"); reviewed = (…, "reviewing", "integrating"); integrated = (…, "integrating",
+  "validating"); and "shipped" = board rows with `is_terminal === true`. Cross-family review
+  means implemented and reviewed are both non-null AND reviewed !== implemented.
+- The `report` command handler (async report, ~line 690) fetches board/timeline plus the
+  track-record/governance/audit views and calls `formatReport({...}, { lane })`. The
+  per-command `options` map (line ~801+) declares flags; boolean flags read as
+  `values.<flag>`. `report` has NO `json` flag yet.
+
+THE FEATURE — ONE TASK (no DB migration; a NEW pure function + one CLI flag):
+
+1. Add a NEW exported PURE, total function with the SAME first/second arguments as
+   `formatReport`:
+   `reportJson({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [] } = {}, { lane = null } = {})`
+   to bin/ainarres.mjs. It returns a PLAIN OBJECT (no I/O, no clock, never throws) with
+   EXACTLY these keys:
+     - `lane`: the lane string, or null.
+     - `shipped`: an array, one entry per board row with `is_terminal === true`, each:
+         { task_id: row.task_id,
+           pr: prFor(row.task_id) — url string or null,
+           implemented: family or null,
+           reviewed: family or null,
+           integrated: family or null,
+           crossFamilyReview: boolean (implemented != null && reviewed != null
+                              && reviewed !== implemented) }
+     - `trackRecord`: the `trackRecord` input, passed through as-is (array).
+     - `governance`: the `governance` input, passed through as-is (array).
+     - `auditFlags`: the `auditFlags` input, passed through as-is (array).
+     - `governanceActions`: the `governanceActions` input, passed through as-is (array).
+   REUSE the existing `prFor` / `familyOfTransition` derivations (extracting `prFor` to a
+   shared module-scope helper is fine and preferred — do NOT change formatReport's output).
+
+2. Wire the CLI: add `json: { type: "boolean" }` to the `report` entry in the `options`
+   map. In the report handler, when `values.json` is set, print
+   `JSON.stringify(reportJson({ board, timeline, trackRecord, governance, auditFlags, governanceActions }, { lane }), null, 2)`
+   followed by a newline INSTEAD of the human text, reusing the handler's already-fetched
+   rows (same degrade-on-http-error behavior as today). (This wiring is not part of the
+   substrate-free test — the ACCEPTANCE tests the PURE `reportJson`.)
+
+ACCEPTANCE — add assertions to test/status-format.test.ts (import `reportJson`). They must
+FAIL on current main (no `reportJson` export) and PASS after:
+- Given board `[{ task_id: "T1", is_terminal: true }]` and a timeline with, for T1: a
+  transition `implementing→reviewing` by family "opencode+big-pickle", a transition
+  `reviewing→integrating` by family "claude-code+sonnet", a transition
+  `integrating→validating` by family "grok+grok-build", and a transition whose
+  `data.artifacts` includes `{ type: "pr", url: "https://x/pr/1" }`,
+  `reportJson({ board, timeline }, { lane: "dev" }).shipped[0]` deep-equals
+    { task_id: "T1", pr: "https://x/pr/1", implemented: "opencode+big-pickle",
+      reviewed: "claude-code+sonnet", integrated: "grok+grok-build",
+      crossFamilyReview: true }.
+- A shipped task whose reviewed family EQUALS its implemented family → `crossFamilyReview: false`.
+- `reportJson()` (no args) deep-equals
+    { lane: null, shipped: [], trackRecord: [], governance: [], auditFlags: [],
+      governanceActions: [] }.
+- Pass-through: given non-empty `trackRecord`/`governance`/`auditFlags`/`governanceActions`
+  inputs, each appears unchanged (same rows) on the result.
+- `JSON.stringify(reportJson({}))` parses back to the empty-shape object above (valid JSON —
+  no undefined values, no functions).
+
+VALIDATE (substrate-free — the ONLY validate; needs NO database, NO docker, NO make, NO
+psql. Run it verbatim; it must fail on main and pass after your change):
+    npx vitest run test/status-format.test.ts
+
+CONSTRAINTS:
+- No DB migration. No new view. No new fetch. Do NOT change any verb, view, or auth path,
+  and do NOT change `formatReport`'s existing text output.
+- Keep `reportJson` PURE and TOTAL. Do not make it fetch anything — the handler passes rows
+  in (mirror the `formatReport` wiring precisely).
+- JavaScript only (bin/ainarres.mjs is ESM); tests are vitest in test/status-format.test.ts.

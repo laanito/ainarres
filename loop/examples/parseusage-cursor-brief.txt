@@ -1,0 +1,65 @@
+Teach the PURE `parseUsage(logText, family)` in bin/ainarres.mjs to extract token counts
+from the CURSOR harness's JSON output, so `cursor-agent+composer-2.5` stops reading
+"tokens: unknown" in the M20 track record. This is a PURE FUNCTION change only — no
+consequence, no auth path, no DB migration, no CLI wiring. It is fully SUBSTRATE-FREE to
+validate (a vitest unit test, no database).
+
+CONTEXT (why): the cursor implementer wrapper runs `cursor-agent … --output-format json`,
+whose final result line carries a `usage` object. `parseUsage` already handles the claude
+(`usage.input_tokens`, snake_case) and opencode (`step_finish` events) shapes; this adds a
+third branch for cursor's shape. (grok is a separate future slice.)
+
+WHAT EXISTS TODAY (read before coding; do NOT change the claude/opencode behavior):
+- bin/ainarres.mjs exports the PURE `parseUsage(logText, family)`. It dispatches by family:
+  opencode families (`family.startsWith("opencode+")`) parse the opencode JSON-event shape;
+  otherwise it scans for the Anthropic/claude `usage.input_tokens` shape; anything it can't
+  parse returns `null` (deliberate — "unknown", never 0). Return shape on success:
+  `{ tokens: { input, output, cache_read, cache_creation }, model }`. Tests: test/parse-usage.test.ts.
+- The cursor JSON output's result line is a single JSON object with a top-level `usage`
+  object (camelCase), e.g.:
+    {"type":"result", …, "session_id":"…", "request_id":"…",
+     "usage":{"inputTokens":30371,"outputTokens":639,"cacheReadTokens":122566,"cacheWriteTokens":0}}
+  cursor's `inputTokens` is the FRESH (non-cache) input and `cacheReadTokens` is separate
+  (Anthropic-like — NOT grok's overlapping convention), so the fields map directly.
+
+THE FEATURE — ONE TASK (pure function; no CLI, no DB):
+
+1. Extend `parseUsage(logText, family)` so that when `family` is a string beginning with
+   `"cursor-agent+"`, it parses the cursor shape (leave the opencode branch, the
+   claude/Anthropic path, and the `null` returns for other families exactly as they are):
+   - Scan `logText` line by line. For each line that parses as JSON (wrap each JSON.parse in
+     try/catch; skip non-JSON / malformed lines — never throw) whose top-level `usage` is an
+     object with a NUMERIC `usage.inputTokens`, treat it as a usage record. Keep the LAST
+     such record found (consistent with how the claude path keeps the last usage object).
+   - From that last record, return:
+     `{ tokens: { input: usage.inputTokens, output: usage.outputTokens,
+                  cache_read: usage.cacheReadTokens, cache_creation: usage.cacheWriteTokens },
+        model: null }`
+     (each field a number; if a field is missing/non-numeric, use 0 — except keep `input`
+     required for a record to count).
+   - If NO cursor usage record is found, return `null` (unknown — e.g. a claude/opencode/
+     plain-text log handed to a cursor family).
+   - Keep the function PURE and TOTAL: no I/O, no clock, never throws on any input.
+
+ACCEPTANCE — add assertions to test/parse-usage.test.ts. They must FAIL on current main
+(cursor logs currently parse to null) and PASS after:
+- Given a log line
+    {"type":"result","session_id":"s","usage":{"inputTokens":30371,"outputTokens":639,"cacheReadTokens":122566,"cacheWriteTokens":0}}
+  (you may interleave unrelated event lines and one malformed line to prove they're skipped),
+  `parseUsage(<that log>, "cursor-agent+composer-2.5")` deep-equals
+    { tokens: { input: 30371, output: 639, cache_read: 122566, cache_creation: 0 }, model: null }.
+- When TWO cursor usage lines are present, the LAST one wins (matches the claude path).
+- `parseUsage("not json\n{oops\n", "cursor-agent+composer-2.5")` returns `null`.
+- A claude-shaped log or an opencode-shaped log handed to a `cursor-agent+` family returns
+  `null` (the cursor branch only recognizes `usage.inputTokens`).
+- The existing claude AND opencode family tests are UNCHANGED (both branches untouched).
+
+VALIDATE (substrate-free — the ONLY validate; needs NO database, NO docker, NO make, NO
+psql. Run it verbatim; it must fail on main and pass after your change):
+    npx vitest run test/parse-usage.test.ts
+
+CONSTRAINTS:
+- No DB migration. No new view. No CLI wiring. Do NOT change record_usage, any verb, view,
+  or auth path. Only bin/ainarres.mjs `parseUsage` + test/parse-usage.test.ts.
+- Do NOT change the claude or opencode branches, or the null-return for grok+* families.
+- Keep `parseUsage` PURE and TOTAL. JavaScript only (bin/ainarres.mjs is ESM); vitest tests.

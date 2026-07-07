@@ -1,0 +1,88 @@
+Give `ainarres status` a COMPACT rendering mode (`--compact`): collapse the multi-section
+human status into a THREE-LINE dense summary — a header, a one-line stage tally, and a
+one-line counters line — for at-a-glance use (especially under `--watch`). This is a PURE
+FORMATTER change plus a one-flag CLI wiring: no consequence, no auth path, no DB migration.
+It is fully SUBSTRATE-FREE to validate (a vitest unit test, no database).
+
+NOTE — this brief is SINGLE-USE: the run ships its task to `main`, so a re-run needs a
+fresh brief whose work isn't already on main.
+
+WHAT EXISTS TODAY (read before coding; do NOT change the default behavior):
+- bin/ainarres.mjs exports the PURE, total `formatStatus({ board = [], feed = [],
+  abandoned = [] }, { lane = null, feedLimit = 10 } = {})` (around line 107). It returns a
+  multi-section string: a header line, a per-stage block (one `  <stage>: <count>` line
+  each + a `  total: N` line), a `  blocked: N` line (+ per-blocked uuids), a
+  `  claimed: N` line, an `active (N):` section (claimed & not abandoned), an
+  `abandoned (N):` section, an `escalated (N):` section, and a `recent events (showing up
+  to <feedLimit>):` section. It is PURE and TOTAL (never throws on empty/partial input).
+  Its unit tests live in test/status-format.test.ts (mock rows, no substrate).
+- The counters are derived exactly as: blocked = board rows with `blocked === true`;
+  claimed = board rows with `claimed_by != null`; active = board rows with
+  `claimed_by != null && abandoned !== true`; abandoned = the LENGTH of the separate
+  `abandoned` input array (NOT a board filter).
+- The `status` command handler (async status, ~line 642) fetches board/timeline/abandoned
+  and calls `formatStatus({...}, { lane, feedLimit })`, once for a single print and again
+  each tick under `--watch`. Boolean CLI flags are declared per-command in the `options`
+  map (line ~781: `status: { lane: {type:"string"}, limit: {type:"string"},
+  watch: {type:"boolean"}, interval: {type:"string"}, token: {type:"string"} }`), and read
+  as `values.<flag>` (e.g. `values.watch`).
+
+THE FEATURE — ONE TASK (no DB migration; a pure formatter option + one CLI flag):
+
+1. Extend the PURE `formatStatus` SECOND argument with a new boolean option
+   `compact = false` (EXACTLY as `lane`/`feedLimit` are options there). Keep the function
+   PURE and TOTAL. When `compact` is FALSE the output must be BYTE-IDENTICAL to today
+   (all existing sections, unchanged) — this is a hard regression guard.
+
+   When `compact` is TRUE, return ONLY these lines (nothing else — no active/abandoned/
+   escalated/recent-events sections, no per-task or per-blocked uuid lines, no `total:`):
+
+   (line 1) the SAME header as today:
+       "status — lane <lane> (<n> tasks)"   when a lane is given, else
+       "status — all lanes (<n> tasks)"     where <n> = board.length.
+
+   (line 2) the STAGE TALLY — the per-stage counts collapsed onto ONE line: the stage
+       keys ALPHABETICALLY sorted, each rendered "<stage>:<count>" (no space after the
+       colon), joined by a single space, indented two spaces:
+       "  designing:1 done:2 implementing:1"
+       If the board is EMPTY, line 2 is instead the existing empty marker: "  (no tasks)".
+
+   (line 3) the COUNTERS — one line, indented two spaces, the four counts described in
+       WHAT EXISTS, rendered "<name>:<count>" joined by a single space, in THIS order:
+       "  blocked:<b> claimed:<c> active:<a> abandoned:<ab>"
+
+2. Wire the CLI: add `compact: { type: "boolean" }` to the `status` entry in the `options`
+   map, and pass `compact: values.compact` into the `formatStatus({...}, { lane, feedLimit,
+   compact: values.compact })` call INSIDE the status handler's snapshot — so BOTH a plain
+   `ainarres status --compact` and `ainarres status --watch --compact` render compact.
+   (This fetch/handler wiring is not part of the substrate-free test — mirror how the
+   existing handler simply passes options into the pure formatter; the ACCEPTANCE below
+   tests the PURE formatStatus, which is where the logic lives.)
+
+ACCEPTANCE — add assertions to test/status-format.test.ts (the PURE formatStatus suite).
+They must FAIL on current main (no compact rendering) and PASS after:
+- Given a board of one `designing`, two `done`, and one `implementing` task where the
+  implementing task has `claimed_by` set and `abandoned` not true, and no blocked tasks
+  and an empty `abandoned` array,
+  `formatStatus({ board }, { lane: "dev", compact: true })` returns EXACTLY:
+      "status — lane dev (4 tasks)\n  designing:1 done:2 implementing:1\n  blocked:0 claimed:1 active:1 abandoned:0"
+  and the output does NOT contain "recent events" nor "abandoned (" nor "total:".
+- Given an empty board and empty feed/abandoned,
+  `formatStatus({}, { compact: true })` returns EXACTLY:
+      "status — all lanes (0 tasks)\n  (no tasks)\n  blocked:0 claimed:0 active:0 abandoned:0"
+- Given a board with one `blocked === true` task and an `abandoned` input array of length 2,
+  the compact counters line contains "blocked:1" and "abandoned:2".
+- Regression: `formatStatus({ board, feed, abandoned }, { lane })` with NO compact option
+  still renders every existing section (assert it contains "recent events (showing up to
+  10):") and is unchanged — the existing tests in this file must all still pass.
+
+VALIDATE (substrate-free — the ONLY validate; needs NO database, NO docker, NO make, NO
+psql. Run it verbatim; it must fail on main and pass after your change):
+    npx vitest run test/status-format.test.ts
+
+CONSTRAINTS:
+- No DB migration. No new view. No new fetch. Do NOT change any verb, view, or auth path.
+- Keep `formatStatus` PURE and TOTAL, and keep its DEFAULT (non-compact) output
+  byte-identical to today. Do not make the formatter fetch anything — the handler passes
+  the flag in (mirror the existing `lane`/`feedLimit` wiring precisely).
+- JavaScript only (bin/ainarres.mjs is ESM); tests are vitest in test/status-format.test.ts.
