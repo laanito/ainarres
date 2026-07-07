@@ -44,13 +44,14 @@ completing the usefulness of M20's track record, which read `unknown` for everyo
 
 1. **Vet a model against the harness's ACTUAL toolset before seating it.** nano
    (`nemotron-3-nano`) kept calling a hallucinated `str_replace_editor` tool — absent from
-   opencode's toolset — and **spun on the rejection for two hours**, holding a task's lease
-   while making zero progress. A tier-0 that can't drive the real tools is worse than none;
+   opencode's toolset — and **spun on the rejection for ~10 minutes**, making zero progress
+   before the task was reclaimed. A tier-0 that can't drive the real tools is worse than none;
    it was disabled the same day (#96). **This spin is the seed of v6's spend-audit** (below):
    the failure a reject-counter can't see, but a token-watch can.
 2. **The lease-vs-liveness race.** nano's spin exposed a buried assumption in ADR 0009's
-   optimistic reclaim: *lease-lost ⇒ worker dead*. A slow-but-alive worker breaks it — its
-   lease lapses, another tier reclaims, two workers touch one task. `main` was never at risk
+   optimistic reclaim: *a released claim ⇒ worker dead*. A worker still alive but no longer
+   holding its claim (its sweep ended, or its lease lapsed) breaks it — another tier reclaims,
+   two workers can touch one task. `main` was never at risk
    (the `lease_lost` invariant rejects the stale worker; `release_stranded` keys on the
    worker's sub; the single integrator re-validates), but task-id branch names could collide
    on a non-ff push. Fixed with **per-sweep branch names** `dev/<task.id>-$LOOP_SWEEP_ID`
