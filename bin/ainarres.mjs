@@ -563,6 +563,7 @@ export function parseUsage(logText, family) {
   if (!family) return null;
   if (/^claude-code\+/.test(family)) return parseClaudeUsage(logText);
   if (/^opencode\+/.test(family)) return parseOpencodeUsage(logText);
+  if (/^cursor-agent\+/.test(family)) return parseCursorUsage(logText);
   return null;
 }
 
@@ -621,6 +622,32 @@ function parseOpencodeUsage(logText) {
   }
   if (!found) return null;
   return { tokens: { input, output, cache_read: cacheRead, cache_creation: cacheCreation }, model: null };
+}
+
+// cursor-agent harness (composer-2.5) emits JSON lines; a usage record has a top-level
+// `usage` object with a NUMERIC usage.inputTokens (camelCase). Scan lines, skip non-JSON
+// / malformed (never throw), keep the LAST usage record found. Missing optional fields
+// default to 0; input is required for a record to count. Returns null when no record found.
+function parseCursorUsage(logText) {
+  let best = null;
+  for (const line of logText.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    let obj;
+    try { obj = JSON.parse(t); } catch { continue; }
+    if (obj && obj.usage && typeof obj.usage === "object" && typeof obj.usage.inputTokens === "number") {
+      best = obj;
+    }
+  }
+  if (!best) return null;
+  const u = best.usage;
+  const tokens = {
+    input: u.inputTokens,
+    output: typeof u.outputTokens === "number" ? u.outputTokens : 0,
+    cache_read: typeof u.cacheReadTokens === "number" ? u.cacheReadTokens : 0,
+    cache_creation: typeof u.cacheWriteTokens === "number" ? u.cacheWriteTokens : 0,
+  };
+  return { tokens, model: null };
 }
 
 const COMMANDS = {
