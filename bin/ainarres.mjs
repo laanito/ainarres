@@ -294,6 +294,20 @@ function familyOfTransition(timeline, taskId, from, to) {
   return null;
 }
 
+// Newest-first PR reference for a task, dug out of its transition artifacts.
+// Module-scope PURE helper reused by formatReport and reportJson.
+function prFor(timeline, taskId) {
+  for (const ev of timeline) {
+    if (ev.task_id !== taskId) continue;
+    const arts = ev.data?.artifacts;
+    if (Array.isArray(arts)) {
+      const pr = arts.find((a) => a && a.type === "pr" && a.url);
+      if (pr) return pr.url;
+    }
+  }
+  return null;
+}
+
 // Compact token count for the report (1234 → "1.2k", 1_200_000 → "1.2M"). null/
 // undefined → "unknown" — a family we could not measure must read as unknown, NEVER
 // as 0 (which would read as free). Pure.
@@ -317,25 +331,12 @@ function fmtHeal(secs) {
 export function formatReport({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [] } = {}, { lane = null } = {}) {
   const lines = [lane ? `end-of-run report — lane ${lane}` : "end-of-run report — all lanes"];
 
-  // Newest-first PR reference for a task, dug out of its transition artifacts.
-  const prFor = (taskId) => {
-    for (const ev of timeline) {
-      if (ev.task_id !== taskId) continue;
-      const arts = ev.data?.artifacts;
-      if (Array.isArray(arts)) {
-        const pr = arts.find((a) => a && a.type === "pr" && a.url);
-        if (pr) return pr.url;
-      }
-    }
-    return null;
-  };
-
   // What shipped: tasks at a terminal stage.
   const shipped = board.filter((r) => r.is_terminal === true);
   lines.push(`shipped (${shipped.length}):`);
   if (shipped.length === 0) lines.push("  (none)");
   for (const row of shipped) {
-    lines.push(`  - ${row.task_id}  ${prFor(row.task_id) ?? "(no PR ref)"}`);
+    lines.push(`  - ${row.task_id}  ${prFor(timeline, row.task_id) ?? "(no PR ref)"}`);
     // Per-task stage→family attribution.
     const implBy = familyOfTransition(timeline, row.task_id, "implementing", "reviewing");
     const revBy = familyOfTransition(timeline, row.task_id, "reviewing", "integrating");
@@ -491,6 +492,28 @@ export function formatReport({ board = [], timeline = [], trackRecord = [], gove
   }
 
   return lines.join("\n");
+}
+
+// Pure, TOTAL JSON shaper for the end-of-run report. Same two-arg signature as
+// formatReport: rows in (already fetched), plain object out (no I/O, no clock,
+// never throws). Mirrors the same structure report --json will emit.
+export function reportJson({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [] } = {}, { lane = null } = {}) {
+  const shipped = board
+    .filter((r) => r.is_terminal === true)
+    .map((row) => {
+      const implemented = familyOfTransition(timeline, row.task_id, "implementing", "reviewing");
+      const reviewed = familyOfTransition(timeline, row.task_id, "reviewing", "integrating");
+      const integrated = familyOfTransition(timeline, row.task_id, "integrating", "validating");
+      return {
+        task_id: row.task_id,
+        pr: prFor(timeline, row.task_id),
+        implemented,
+        reviewed,
+        integrated,
+        crossFamilyReview: implemented != null && reviewed != null && reviewed !== implemented,
+      };
+    });
+  return { lane, shipped, trackRecord, governance, auditFlags, governanceActions };
 }
 
 // The human-readable gist of an event's structured data — the verdict/reason the
@@ -789,7 +812,11 @@ const COMMANDS = {
     const governance = gov.httpOk && Array.isArray(gov.body) ? gov.body : [];
     const auditFlags = af.httpOk && Array.isArray(af.body) ? af.body : [];
     const governanceActions = ga.httpOk && Array.isArray(ga.body) ? ga.body : [];
-    process.stdout.write(`${formatReport({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions }, { lane })}\n`);
+    if (values.json) {
+      process.stdout.write(`${JSON.stringify(reportJson({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions }, { lane }), null, 2)}\n`);
+    } else {
+      process.stdout.write(`${formatReport({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions }, { lane })}\n`);
+    }
   },
 
   // record-usage — M20 Slice A: stamp a sweep's TOKEN spend onto the task the actor
@@ -846,7 +873,7 @@ const OPTS = {
   abandoned: { lane: { type: "string" }, token: { type: "string" } },
   status: { lane: { type: "string" }, limit: { type: "string" }, watch: { type: "boolean" }, interval: { type: "string" }, compact: { type: "boolean" }, json: { type: "boolean" }, token: { type: "string" } },
   events: { lane: { type: "string" }, task: { type: "string" }, family: { type: "string" }, type: { type: "string" }, limit: { type: "string" }, json: { type: "boolean" }, token: { type: "string" } },
-  report: { lane: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
+  report: { lane: { type: "string" }, limit: { type: "string" }, json: { type: "boolean" }, token: { type: "string" } },
   "record-usage": { actor: { type: "string" }, family: { type: "string" }, "from-log": { type: "string" }, data: { type: "string" }, sweep: { type: "string" }, task: { type: "string" }, token: { type: "string" } },
 };
 
