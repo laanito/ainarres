@@ -71,10 +71,17 @@ own `reviewing` and `integrating`. Never invent stages, never skip the task's va
 One task at a time.
 EOF
 
-# Headless auto-approval (the cursor analog of grok --always-approve / claude
-# --dangerously-skip-permissions): -p is non-interactive print mode; --force allows all
-# tool calls (write + shell) unless explicitly denied. Overridable via CURSOR_FLAGS.
-FLAGS="${CURSOR_FLAGS:---force --output-format text}"
+# Headless approval. `-p` is non-interactive print mode. We use `--trust` (trust this
+# worktree), NOT `--force`/`--yolo` ("Run Everything") — the org admin has DISABLED Run
+# Everything, so --force errors out. With --trust and cursor's `approvalMode: "allowlist"`
+# (~/.cursor/cli-config.json): file edits (Write/Edit) run headless automatically, but
+# SHELL commands run only if pre-allowed in `permissions.allow`. The implementer needs at
+# least these entries (one-time owner setup; git covers all subcommands):
+#     "Shell(git)", "Shell(npx)", "Shell(node)"
+# Without them the sweep claims a task, then its git/npx calls get blocked and it can't
+# advance (falls to the next tier). `--output-format json` makes the log machine-readable
+# (and carries cursor's usage.{inputTokens,…} for future token capture). Override via CURSOR_FLAGS.
+FLAGS="${CURSOR_FLAGS:---trust --output-format json}"
 
 # Harness command guard (loop/guard-bin, 2026-07-04 board-wipe): deny make/docker/psql/
 # dbmate to the harness so a sweep can't tear down the shared substrates. Prepended, so
