@@ -24,8 +24,9 @@ loop/
 
 | Tier / peer | Harness / family | Role(s) |
 |---|---|---|
-| `nano-implementer` | `opencode + nemotron-3-nano` | implementer (tier-0, cheapest; **1 concurrent session — never pooled**) |
-| `cheap-implementer` | `opencode + big-pickle` (free API) | implementer (primary) |
+| `nano-implementer` | `opencode + nemotron-3-nano` | implementer (tier-0; **DISABLED** — hallucinated tools) |
+| `cheap-implementer` | `opencode + big-pickle` (free API) | implementer (primary, ×3 pool) |
+| `qwen-implementer` | `opencode + qwen3-coder-next` (80B) | implementer (cheap serial, big-pickle par; **1 session — never pooled**) |
 | `cursor-implementer` | `cursor-agent + composer-2.5` | implementer (fallback, higher quality; not frontier) |
 | `fallback-implementer` | `opencode + nemotron-3-ultra` (free API) | implementer (fallback) |
 | `designer` | `claude-code + opus` | designer (one-shot decomposition) |
@@ -33,14 +34,15 @@ loop/
 | `frontier-claude-reviewer` | `claude-code + sonnet` | reviewer (M19 peer, **never** integrates) |
 
 The driver sweeps the tiers **in this order, in rounds** (`roles.sh::LOOP_TIERS`).
-Because each cheap tier runs to "nothing claimable" *before* the next runs, the
-**tier-0** `nano-implementer` (nemotron-3-nano) takes first crack at the easy
-`implementing` work; big-pickle's pool then fans out on the rest; then the serial
-**fallbacks** — first `cursor-implementer` (cursor-agent + composer-2.5, a
-higher-quality non-frontier tier) and behind it `fallback-implementer`
-(nemotron-3-ultra; swap via
-`OPENCODE_FALLBACK_MODEL`) — cover an earlier tier being down/depleted **and** retry a
-task it failed, both before the task escalates. The frontier only picks up what's left:
+Because each cheap tier runs to "nothing claimable" *before* the next runs,
+big-pickle's ×3 pool takes the bulk of the `implementing` work; then the serial tiers
+in order: `qwen-implementer` (opencode + qwen3-coder-next, an 80B ~big-pickle-par cheap
+implementer, single serial sweep — its `:cloud` backend allows one session) takes the
+first serial crack, then the higher-quality `cursor-implementer` (cursor-agent +
+composer-2.5), and behind it `fallback-implementer` (nemotron-3-ultra; swap via
+`OPENCODE_FALLBACK_MODEL`) — each covers an earlier tier being down/depleted **and**
+retries a task it failed, before the task escalates. (`nano-implementer` is the disabled
+tier-0 pre-pass slot — `LOOP_PRE_TIERS=()`; see below.) The frontier only picks up what's left:
 review/integrate, and M12-escalated tasks the cheap tiers couldn't finish (`tier:2`).
 The dev `implementing` stage uses `escalate_after = 2`, so both cheap tiers get an
 attempt before grok. (The local `qwen3.6` was dropped: it implemented correctly but
@@ -56,11 +58,13 @@ shared `auth.json` symlinked in. The opencode isolation is load-bearing: opencod
 its session SQLite at `$XDG_DATA_HOME/opencode/opencode.db`, and concurrent opencode
 processes sharing it collide (`database is locked`) — the first real gate run collapsed
 the pool to one live worker for exactly this reason. This is the swarm's throughput. Ahead of the
-pool each round, any **tier-0 pre-pass** tiers (`roles.sh::LOOP_PRE_TIERS` — the
-`nano-implementer` today) run once, serially: the cheapest model drains what it can
-before big-pickle fans out. A backend limited to **one concurrent session** (nano) lives
-here, never in the ×`LOOP_POOL_SIZE` pool, which would collide on it. The remaining tiers (`LOOP_SERIAL_TIERS` = cursor-implementer, fallback-implementer, then the frontier peers)
-still run once each, serially, after the pool. **Integration stays single**: the lone
+pool each round, any **tier-0 pre-pass** tiers (`roles.sh::LOOP_PRE_TIERS`) run once,
+serially, before big-pickle fans out — currently **empty** (`nano-implementer` sat here
+until it was disabled). The remaining tiers (`LOOP_SERIAL_TIERS` = qwen-implementer,
+cursor-implementer, fallback-implementer, then the frontier peers) still run once each,
+serially, after the pool. A backend limited to **one concurrent session** (qwen, cursor)
+lives in a serial slot, never in the ×`LOOP_POOL_SIZE` pool, which would collide on it.
+**Integration stays single**: the lone
 frontier integrator drains `integrating` FIFO, rebasing on the latest default branch +
 re-validating before each merge — it *is* the merge queue (parallel-loop.md D2), which
 is what keeps `main` coherent while implementing runs wide. A rebase conflict or a

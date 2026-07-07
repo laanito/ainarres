@@ -388,6 +388,25 @@ join app.features ft on ft.name = any (array['lane:dev', 'role:implementer'])
 where f.key = 'opencode+nemotron-3-nano'
 on conflict (family_id, feature_id) do nothing;
 
+-- ── Roster: opencode + qwen3-coder-next (cheap serial implementer) ───────────
+-- An 80B cheap implementer at big-pickle's level, reached through opencode's ollama
+-- provider (Ollama cloud passthrough): `-m ollama/qwen3-coder-next:cloud`. Holds
+-- role:implementer on lane:dev, NOT capability:frontier/tier:2. The loop runs it as the
+-- FIRST serial tier after the pool (loop/roles.sh::LOOP_SERIAL_TIERS) — a single serial
+-- sweep, since its :cloud backend allows only ONE concurrent session, so it can't join
+-- big-pickle's ×N pool. Reuses the opencode implementer wrapper (no new harness). A family
+-- must be registered here to be claim-eligible ("unknown family" ⇒ not_eligible, ADR 0007).
+insert into app.agent_families (key, description) values
+  ('opencode+qwen3-coder-next', 'opencode/ollama, qwen3-coder-next:cloud (80B) — cheap serial implementer, big-pickle par (1 concurrent session)')
+on conflict (key) do nothing;
+
+insert into app.family_features (family_id, feature_id)
+select f.id, ft.id
+from app.agent_families f
+join app.features ft on ft.name = any (array['lane:dev', 'role:implementer'])
+where f.key = 'opencode+qwen3-coder-next'
+on conflict (family_id, feature_id) do nothing;
+
 -- ── Roster: cursor-agent + composer-2.5 (fallback implementer) ───────────────
 -- A higher-quality implementer than the cheap opencode tiers, below the grok frontier:
 -- Cursor's headless coding agent (`cursor-agent -p … --model composer-2.5 --force`).

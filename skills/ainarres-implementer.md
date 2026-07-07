@@ -21,8 +21,11 @@ Repeat until `claim` reports `code:"empty"`:
    `task.payload`: `goal`, `instructions`, `files`, `validate`, `acceptance`. That is your
    complete brief.
 
-2. **Branch**: create a fresh branch off the default branch for this task, e.g.
-   `git checkout -b dev/<task.id>` (a stable name the integrator can find later).
+2. **Branch**: create a fresh branch off the default branch, named uniquely to THIS
+   attempt so two workers that race the same task never collide on the remote ref:
+   `git checkout -b dev/<task.id>-$LOOP_SWEEP_ID` (the loop exports `$LOOP_SWEEP_ID` per
+   worker; if unset, use any short unique suffix). Use this SAME name to push and to
+   record `--branch` — the integrator finds the branch from that reference, not by name.
 
 3. **Implement** exactly what `instructions` says, touching `files`. Write the code *and*
    the tests the change needs. For long work, keep your lease alive with the bounded
@@ -39,8 +42,8 @@ Repeat until `claim` reports `code:"empty"`:
    must be non-empty. If it's empty you haven't done the work (a green `validate` can be
    vacuous — the base branch may already satisfy it); keep working, don't advance.
    ```
-   git add -A && git commit -m "<task goal>" && git push -u origin dev/<task.id>
-   ainarres advance <task.id> --to reviewing --note "validate passes" --branch dev/<task.id>
+   git add -A && git commit -m "<task goal>" && git push -u origin dev/<task.id>-$LOOP_SWEEP_ID
+   ainarres advance <task.id> --to reviewing --note "validate passes" --branch dev/<task.id>-$LOOP_SWEEP_ID
    ```
    - `code:"ok"` → done with this task; go to step 1.
    - `code:"lease_lost"` → you lost the lease mid-work; go to step 1.
