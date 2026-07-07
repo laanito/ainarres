@@ -141,4 +141,67 @@ describe("parseUsage — the per-family token parser", () => {
   it("still returns null for plain-text log with opencode family", () => {
     expect(parseUsage("commit only bin/lib/x.mjs\nrun the loop until empty\n", "opencode+big-pickle")).toBeNull();
   });
+
+  // ---------------------------------------------------------------------------
+  // cursor-agent family — JSON lines with top-level usage (camelCase tokens).
+  // Scan for the LAST usage record with a numeric usage.inputTokens.
+  // ---------------------------------------------------------------------------
+
+  // prettier-ignore
+  const cursorLog = [
+    `{"type":"event","ts":"1","content":"thinking..."}`,
+    // malformed JSON — must be skipped without throwing
+    '{"type":"result","usage":{"inputTokens":999',
+    `{"type":"result","session_id":"s","usage":{"inputTokens":30371,"outputTokens":639,"cacheReadTokens":122566,"cacheWriteTokens":0}}`,
+    `{"type":"heartbeat","ts":"2"}`,
+  ].join("\n");
+
+  it("extracts cursor usage from a log with interleaved events and a malformed line", () => {
+    const u = parseUsage(cursorLog, "cursor-agent+composer-2.5");
+    expect(u).not.toBeNull();
+    expect(u!.tokens).toEqual({
+      input: 30371,
+      output: 639,
+      cache_read: 122566,
+      cache_creation: 0,
+    });
+    expect(u!.model).toBeNull();
+  });
+
+  it("takes the LAST cursor usage line when multiple exist", () => {
+    const earlier = JSON.stringify({
+      type: "result",
+      session_id: "s1",
+      usage: { inputTokens: 100, outputTokens: 50, cacheReadTokens: 10, cacheWriteTokens: 5 },
+    });
+    const later = JSON.stringify({
+      type: "result",
+      session_id: "s2",
+      usage: { inputTokens: 30371, outputTokens: 639, cacheReadTokens: 122566, cacheWriteTokens: 0 },
+    });
+    const log = `${earlier}\n${later}`;
+    const u = parseUsage(log, "cursor-agent+composer-2.5");
+    expect(u).not.toBeNull();
+    expect(u!.tokens).toEqual({
+      input: 30371,
+      output: 639,
+      cache_read: 122566,
+      cache_creation: 0,
+    });
+    expect(u!.model).toBeNull();
+  });
+
+  it("returns null for a cursor log with no usage record", () => {
+    expect(parseUsage("not json\n{oops\n", "cursor-agent+composer-2.5")).toBeNull();
+  });
+
+  it("returns null for a claude-shaped log with cursor-agent family (wrong shape)", () => {
+    // claude uses snake_case input_tokens — must not be recognized as cursor usage
+    expect(parseUsage(claudeResult, "cursor-agent+composer-2.5")).toBeNull();
+  });
+
+  it("returns null for an opencode-shaped log with cursor-agent family (no top-level usage)", () => {
+    // opencode has part.tokens, not top-level usage — must not be recognized
+    expect(parseUsage(opencodeLog, "cursor-agent+composer-2.5")).toBeNull();
+  });
 });
