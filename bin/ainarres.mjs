@@ -564,6 +564,7 @@ export function parseUsage(logText, family) {
   if (/^claude-code\+/.test(family)) return parseClaudeUsage(logText);
   if (/^opencode\+/.test(family)) return parseOpencodeUsage(logText);
   if (/^cursor-agent\+/.test(family)) return parseCursorUsage(logText);
+  if (/^grok\+/.test(family)) return parseGrokUsage(logText);
   return null;
 }
 
@@ -648,6 +649,42 @@ function parseCursorUsage(logText) {
     cache_creation: typeof u.cacheWriteTokens === "number" ? u.cacheWriteTokens : 0,
   };
   return { tokens, model: null };
+}
+
+// grok harness logs embed JSON in debug log lines with a prefix before the JSON:
+// `2026-07-07T17:16:30Z DEBUG xai_acp_lib::gateway: received "session/prompt" response: {"stopReason":"end_turn","_meta":{"totalTokens":58050,"modelId":"grok-build","inputTokens":57574,"outputTokens":475,"cachedReadTokens":57344,"reasoningTokens":49}}`.
+// Scan lines for those containing both "_meta" and "inputTokens"; extract the
+// JSON substring from the first { to end of line, parse it, and keep the LAST
+// valid record. grok inputTokens INCLUDES cachedReadTokens, so calculate fresh
+// input = inputTokens - cachedReadTokens.
+function parseGrokUsage(logText) {
+  let best = null;
+  for (const line of logText.split("\n")) {
+    if (!line.includes('"_meta"') || !line.includes('"inputTokens"')) continue;
+    const brace = line.indexOf("{");
+    if (brace === -1) continue;
+    const jsonStr = line.slice(brace);
+    let obj;
+    try { obj = JSON.parse(jsonStr); } catch { continue; }
+    const meta = obj && obj._meta;
+    if (meta && typeof meta === "object" && typeof meta.inputTokens === "number") {
+      best = meta;
+    }
+  }
+  if (!best) return null;
+  const inputTokens = typeof best.inputTokens === "number" ? best.inputTokens : 0;
+  const outputTokens = typeof best.outputTokens === "number" ? best.outputTokens : 0;
+  const cachedReadTokens = typeof best.cachedReadTokens === "number" ? best.cachedReadTokens : 0;
+  const freshInput = Math.max(0, inputTokens - cachedReadTokens);
+  return {
+    tokens: {
+      input: freshInput,
+      output: outputTokens,
+      cache_read: cachedReadTokens,
+      cache_creation: 0,
+    },
+    model: best.modelId ?? null,
+  };
 }
 
 const COMMANDS = {
