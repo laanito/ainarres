@@ -7,6 +7,7 @@
 # Cast (v3 tiers + M19 federated frontier peers) in capability order (cheapest first):
 #   nano-implementer           opencode + nemotron-3-nano   role:implementer  (cheapest, tier-0; 1 concurrent session — NEVER pooled)
 #   cheap-implementer          opencode + big-pickle        role:implementer  (primary, free API)
+#   cursor-implementer         cursor-agent + composer-2.5  role:implementer  (fallback, higher quality; not frontier)
 #   fallback-implementer       opencode + nemotron-3-ultra  role:implementer  (fallback, free API)
 #   designer                   claude-code + opus           role:designer     (one-shot decomposition)
 #   frontier                   grok + grok-build            reviewer + the SINGLE integrator (+escalated impl)
@@ -43,7 +44,7 @@ RUN_DIR="${RUN_DIR:-$REPO/loop/run}"     # per-tier sweep logs (gitignored)
 # the escalation ceiling. (Adding a tier ahead means the LAST cheap tier now rarely runs
 # before escalate_after=2 fires — bump the dev implementing stage's escalate_after in the
 # loop seed if you want all three cheap tiers to attempt before grok.)
-LOOP_TIERS=(nano-implementer cheap-implementer fallback-implementer frontier)
+LOOP_TIERS=(nano-implementer cheap-implementer cursor-implementer fallback-implementer frontier)
 
 # M18 split (ADR 0021): the primary cheap implementer is FANNED OUT into a concurrent
 # pool (LOOP_POOL_SIZE members per round — the swarm's throughput); the remaining tiers
@@ -51,7 +52,10 @@ LOOP_TIERS=(nano-implementer cheap-implementer fallback-implementer frontier)
 # primary). Integration stays single (the grok integrator IS the merge queue,
 # parallel-loop.md D2).
 LOOP_POOL_TIER="${LOOP_POOL_TIER:-cheap-implementer}"
-LOOP_SERIAL_TIERS=(fallback-implementer)
+# Serial fallbacks, run once each (in THIS order) after the pool. cursor-implementer
+# (cursor-agent + composer-2.5) is the higher-quality first fallback; nemotron-3-ultra
+# backs it. Both are single serial sweeps — cursor is a whole harness, not just a model.
+LOOP_SERIAL_TIERS=(cursor-implementer fallback-implementer)
 
 # Tier-0 pre-pass: tiers swept ONCE, serially, BEFORE the concurrent pool each round
 # (driver.sh). nano is the cheapest implementer and drains the easy work it can before
@@ -77,6 +81,7 @@ role_features() {
   case "$1" in
     nano-implementer)     echo "lane:dev,role:implementer" ;;  # tier-0: same role, cheapest model
     cheap-implementer)    echo "lane:dev,role:implementer" ;;
+    cursor-implementer)   echo "lane:dev,role:implementer" ;;  # fallback: same role, higher-quality harness (not frontier — no tier:2)
     fallback-implementer) echo "lane:dev,role:implementer" ;;  # same role, different (free-API) model
     frontier)
       if [ "$LOOP_MODE" = "mock" ]; then
@@ -96,6 +101,7 @@ role_family() {
   case "$1" in
     nano-implementer)         echo "opencode+nemotron-3-nano" ;;   # tier-0: cheapest implementer (1 concurrent session)
     cheap-implementer)        echo "opencode+big-pickle" ;;        # primary cheap implementer (free API)
+    cursor-implementer)       echo "cursor-agent+composer-2.5" ;;  # fallback: cursor-agent harness, composer-2.5 model
     fallback-implementer)     echo "opencode+nemotron-3-ultra" ;;  # fallback (free API, more capable)
     designer)                 echo "claude-code+opus" ;;           # M19: opus for design judgment
     frontier-claude-reviewer) echo "claude-code+sonnet" ;;         # M19: sonnet for review (distinct family)
@@ -137,6 +143,10 @@ harness_sweep() {
     cheap-implementer)
       OPENCODE_MODEL="${OPENCODE_PRIMARY_MODEL:-opencode/big-pickle}" \
         eval "${OPENCODE_IMPLEMENTER_CMD:-bash \"$REPO/loop/opencode-implementer.sh\"}" ;;
+    cursor-implementer)
+      # fallback: cursor-agent + composer-2.5 (its own harness wrapper). Serial tier.
+      CURSOR_MODEL="${CURSOR_IMPL_MODEL:-composer-2.5}" \
+        eval "${CURSOR_IMPLEMENTER_CMD:-bash \"$REPO/loop/cursor-implementer.sh\"}" ;;
     fallback-implementer)
       OPENCODE_MODEL="${OPENCODE_FALLBACK_MODEL:-openrouter/nvidia/nemotron-3-ultra-550b-a55b:free}" \
         eval "${OPENCODE_FALLBACK_CMD:-bash \"$REPO/loop/opencode-implementer.sh\"}" ;;

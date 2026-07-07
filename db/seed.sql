@@ -388,6 +388,26 @@ join app.features ft on ft.name = any (array['lane:dev', 'role:implementer'])
 where f.key = 'opencode+nemotron-3-nano'
 on conflict (family_id, feature_id) do nothing;
 
+-- ── Roster: cursor-agent + composer-2.5 (fallback implementer) ───────────────
+-- A higher-quality implementer than the cheap opencode tiers, below the grok frontier:
+-- Cursor's headless coding agent (`cursor-agent -p … --model composer-2.5 --force`).
+-- Holds role:implementer on lane:dev, NOT capability:frontier/tier:2. The loop runs it
+-- as the FIRST serial fallback, ahead of nemotron-3-ultra (loop/roles.sh::
+-- LOOP_SERIAL_TIERS) — a single serial sweep, its own harness wrapper
+-- (loop/cursor-implementer.sh). A family must be registered here to be eligible to
+-- claim ("unknown family" ⇒ not_eligible) — a valid token's features alone are not
+-- enough (ADR 0007).
+insert into app.agent_families (key, description) values
+  ('cursor-agent+composer-2.5', 'cursor-agent harness, composer-2.5 model — fallback implementer (higher quality than the cheap tiers, not frontier)')
+on conflict (key) do nothing;
+
+insert into app.family_features (family_id, feature_id)
+select f.id, ft.id
+from app.agent_families f
+join app.features ft on ft.name = any (array['lane:dev', 'role:implementer'])
+where f.key = 'cursor-agent+composer-2.5'
+on conflict (family_id, feature_id) do nothing;
+
 -- ── M12: capability escalation (ADR 0019, ordered tiers) ─────────────────────
 -- tier:2 is the frontier rung (base implementer work needs no tier feature). The
 -- frontier implementer / escalation target is grok+grok-build: it already integrates;
