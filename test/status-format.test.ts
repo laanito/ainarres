@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { formatStatus, formatEvents, formatReport, fmtTokens } from "../bin/ainarres.mjs";
+import { formatStatus, statusJson, formatEvents, formatReport, fmtTokens } from "../bin/ainarres.mjs";
 
 // Pure unit test: no substrate, no network, no DB, no token. We import the
 // formatter directly from the CLI module — which must NOT run the CLI on import
@@ -226,6 +226,94 @@ describe("formatStatus", () => {
     expect(out).toContain("abandoned (0):");
     // No compact marker lines appear
     expect(out).not.toMatch(/^  blocked:\d+ claimed:\d+ active:\d+ abandoned:\d+$/m);
+  });
+});
+
+describe("statusJson", () => {
+  test("(1) board of one designing, two done, one implementing (claimed, not abandoned) — full shape", () => {
+    const board = [
+      { task_id: "t1", stage: "designing" },
+      { task_id: "t2", stage: "done" },
+      { task_id: "t3", stage: "done" },
+      { task_id: "t4", stage: "implementing", claimed_by: "agent-1" },
+    ];
+    expect(statusJson({ board }, { lane: "dev" })).toEqual({
+      lane: "dev",
+      total: 4,
+      stages: { designing: 1, done: 2, implementing: 1 },
+      blocked: 0,
+      claimed: 1,
+      active: 1,
+      abandoned: 0,
+      recentEvents: [],
+    });
+  });
+
+  test("(2) no args returns empty shape", () => {
+    expect(statusJson()).toEqual({
+      lane: null,
+      total: 0,
+      stages: {},
+      blocked: 0,
+      claimed: 0,
+      active: 0,
+      abandoned: 0,
+      recentEvents: [],
+    });
+  });
+
+  test("(3) blocked and abandoned counts from inputs", () => {
+    const board = [
+      { task_id: "t1", stage: "implementing", blocked: true },
+      { task_id: "t2", stage: "reviewing" },
+    ];
+    const abandoned = [
+      { task_id: "a1", stage: "implementing", claimed_by: "w-1" },
+      { task_id: "a2", stage: "designing", claimed_by: "w-2" },
+    ];
+    expect(statusJson({ board, abandoned })).toMatchObject({
+      blocked: 1,
+      abandoned: 2,
+    });
+  });
+
+  test("(4) feed truncated to feedLimit, first item mapped correctly", () => {
+    const feed = Array.from({ length: 12 }, (_, i) => ({
+      created_at: `2026-07-0${(i % 9) + 1}T00:00:00Z`,
+      type: i === 0 ? "claimed" : "created",
+      task_id: `t${12 - i}`,
+      family: i === 0 ? "grok+grok-build" : null,
+      actor: i === 0 ? "sub-1" : `sub-${i + 1}`,
+    }));
+    const result = statusJson({ feed }, { feedLimit: 10 });
+    expect(result.recentEvents).toHaveLength(10);
+    expect(result.recentEvents[0]).toEqual({
+      at: feed[0].created_at,
+      type: feed[0].type,
+      task: feed[0].task_id,
+      by: feed[0].family ?? feed[0].actor ?? null,
+    });
+  });
+
+  test("(5) JSON.stringify(statusJson({})) round-trips to empty shape (no undefined, no functions)", () => {
+    const parsed = JSON.parse(JSON.stringify(statusJson({})));
+    expect(parsed).toEqual({
+      lane: null,
+      total: 0,
+      stages: {},
+      blocked: 0,
+      claimed: 0,
+      active: 0,
+      abandoned: 0,
+      recentEvents: [],
+    });
+  });
+
+  test("statusJson never throws on empty/partial input", () => {
+    expect(() => statusJson()).not.toThrow();
+    expect(() => statusJson({ board: null })).not.toThrow();
+    expect(() => statusJson({ board: undefined, feed: null })).not.toThrow();
+    expect(() => statusJson({ board: [], feed: [], abandoned: [] })).not.toThrow();
   });
 });
 

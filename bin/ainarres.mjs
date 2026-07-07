@@ -217,6 +217,38 @@ export function formatStatus({ board = [], feed = [], abandoned = [] }, { lane =
   return lines.join("\n");
 }
 
+// Pure, TOTAL shaper that mirrors the --compact slice as a PLAIN OBJECT (no I/O,
+// no clock, never throws on empty/partial input). Used by `status --json`.
+export function statusJson({ board, feed, abandoned } = {}, { lane = null, feedLimit = 10 } = {}) {
+  const brd = board ?? [];
+  const f = feed ?? [];
+  const abd = abandoned ?? [];
+  const stages = {};
+  for (const row of brd) {
+    const s = row.stage;
+    stages[s] = (stages[s] ?? 0) + 1;
+  }
+  const blocked = brd.filter(r => r.blocked === true).length;
+  const claimed = brd.filter(r => r.claimed_by != null).length;
+  const active = brd.filter(r => r.claimed_by != null && r.abandoned !== true).length;
+  const recentEvents = f.slice(0, feedLimit).map(ev => ({
+    at: ev.created_at,
+    type: ev.type,
+    task: ev.task_id,
+    by: ev.family ?? ev.actor ?? null,
+  }));
+  return {
+    lane,
+    total: brd.length,
+    stages,
+    blocked,
+    claimed,
+    active,
+    abandoned: abd.length,
+    recentEvents,
+  };
+}
+
 // Small pure helpers for the M16 board enrichment (no I/O; tolerate older rows).
 function holderOf(row) {
   return row.claimed_by_family ?? row.claimed_by ?? "—";
@@ -659,9 +691,10 @@ const COMMANDS = {
   },
 
   // One-glance oversight summary: fetch board/feed/abandoned views in parallel and
-  // hand the rows to the pure formatStatus(). Prints HUMAN TEXT (not JSON). Needs an
-  // oversight-capable token at runtime (the views are granted to the oversight role);
-  // a non-oversight token gets a PostgREST 401/403 → JSON error envelope + exit 1.
+  // hand the rows to the pure formatStatus(). Prints HUMAN TEXT (not JSON) — or
+  // JSON when --json is set. Needs an oversight-capable token at runtime (the views
+  // are granted to the oversight role); a non-oversight token gets a PostgREST
+  // 401/403 → JSON error envelope + exit 1.
   async status(rest, values, token) {
     const lane = values.lane ?? null;
     const feedLimit = values.limit ? Number(values.limit) : 10;
@@ -682,8 +715,18 @@ const COMMANDS = {
       for (const r of [b, f, a]) {
         if (!r.httpOk) { emit(r.body ?? { ok: false, code: "http_error", status: r.status }, false); return null; }
       }
+      if (values.json) {
+        return statusJson({ board: b.body, feed: f.body, abandoned: a.body }, { lane, feedLimit });
+      }
       return formatStatus({ board: b.body, feed: f.body, abandoned: a.body }, { lane, feedLimit, compact: values.compact });
     };
+
+    // --json: single print, no watch loop (--json wins over --watch).
+    if (values.json) {
+      const result = await snapshot();
+      if (result != null) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      return;
+    }
 
     // --watch: poll-refresh (ADR 0021 D1 — no LISTEN/NOTIFY, no new infra). Reprint
     // the snapshot every --interval seconds (default 2) until interrupted.
@@ -801,7 +844,7 @@ const OPTS = {
   board: { lane: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
   feed: { lane: { type: "string" }, task: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
   abandoned: { lane: { type: "string" }, token: { type: "string" } },
-  status: { lane: { type: "string" }, limit: { type: "string" }, watch: { type: "boolean" }, interval: { type: "string" }, compact: { type: "boolean" }, token: { type: "string" } },
+  status: { lane: { type: "string" }, limit: { type: "string" }, watch: { type: "boolean" }, interval: { type: "string" }, compact: { type: "boolean" }, json: { type: "boolean" }, token: { type: "string" } },
   events: { lane: { type: "string" }, task: { type: "string" }, family: { type: "string" }, type: { type: "string" }, limit: { type: "string" }, json: { type: "boolean" }, token: { type: "string" } },
   report: { lane: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
   "record-usage": { actor: { type: "string" }, family: { type: "string" }, "from-log": { type: "string" }, data: { type: "string" }, sweep: { type: "string" }, task: { type: "string" }, token: { type: "string" } },
