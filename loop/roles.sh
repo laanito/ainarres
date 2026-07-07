@@ -5,8 +5,9 @@
 # the substrate does that.
 #
 # Cast (v3 tiers + M19 federated frontier peers) in capability order (cheapest first):
-#   nano-implementer           opencode + nemotron-3-nano   role:implementer  (cheapest, tier-0; 1 concurrent session — NEVER pooled)
-#   cheap-implementer          opencode + big-pickle        role:implementer  (primary, free API)
+#   nano-implementer           opencode + nemotron-3-nano   role:implementer  (tier-0; DISABLED — hallucinated tools, LOOP_PRE_TIERS=())
+#   cheap-implementer          opencode + big-pickle        role:implementer  (primary pool, free API)
+#   qwen-implementer           opencode + qwen3-coder-next  role:implementer  (cheap serial, big-pickle par; 1 session — NEVER pooled)
 #   cursor-implementer         cursor-agent + composer-2.5  role:implementer  (fallback, higher quality; not frontier)
 #   fallback-implementer       opencode + nemotron-3-ultra  role:implementer  (fallback, free API)
 #   designer                   claude-code + opus           role:designer     (one-shot decomposition)
@@ -44,7 +45,7 @@ RUN_DIR="${RUN_DIR:-$REPO/loop/run}"     # per-tier sweep logs (gitignored)
 # the escalation ceiling. (Adding a tier ahead means the LAST cheap tier now rarely runs
 # before escalate_after=2 fires — bump the dev implementing stage's escalate_after in the
 # loop seed if you want all three cheap tiers to attempt before grok.)
-LOOP_TIERS=(nano-implementer cheap-implementer cursor-implementer fallback-implementer frontier)
+LOOP_TIERS=(cheap-implementer qwen-implementer cursor-implementer fallback-implementer frontier)
 
 # M18 split (ADR 0021): the primary cheap implementer is FANNED OUT into a concurrent
 # pool (LOOP_POOL_SIZE members per round — the swarm's throughput); the remaining tiers
@@ -52,10 +53,12 @@ LOOP_TIERS=(nano-implementer cheap-implementer cursor-implementer fallback-imple
 # primary). Integration stays single (the grok integrator IS the merge queue,
 # parallel-loop.md D2).
 LOOP_POOL_TIER="${LOOP_POOL_TIER:-cheap-implementer}"
-# Serial fallbacks, run once each (in THIS order) after the pool. cursor-implementer
-# (cursor-agent + composer-2.5) is the higher-quality first fallback; nemotron-3-ultra
-# backs it. Both are single serial sweeps — cursor is a whole harness, not just a model.
-LOOP_SERIAL_TIERS=(cursor-implementer fallback-implementer)
+# Serial tiers, run once each (in THIS order) after the pool. qwen-implementer
+# (opencode + qwen3-coder-next, an 80B ~big-pickle-par cheap implementer) takes the first
+# serial crack — it's a single sweep because its :cloud backend allows only 1 concurrent
+# session, so it can't join the ×N pool. Then the higher-quality fallbacks: cursor-implementer
+# (cursor-agent + composer-2.5), backed by nemotron-3-ultra. All single serial sweeps.
+LOOP_SERIAL_TIERS=(qwen-implementer cursor-implementer fallback-implementer)
 
 # Tier-0 pre-pass: tiers swept ONCE, serially, BEFORE the concurrent pool each round
 # (driver.sh). nano is the cheapest implementer and drains the easy work it can before
@@ -86,8 +89,9 @@ LOOP_FRONTIER_PEERS=(frontier frontier-claude-reviewer)
 # the run. In mock mode the frontier drops implementer/tier:2 (see header).
 role_features() {
   case "$1" in
-    nano-implementer)     echo "lane:dev,role:implementer" ;;  # tier-0: same role, cheapest model
+    nano-implementer)     echo "lane:dev,role:implementer" ;;  # tier-0 (disabled): same role, cheapest model
     cheap-implementer)    echo "lane:dev,role:implementer" ;;
+    qwen-implementer)     echo "lane:dev,role:implementer" ;;  # cheap serial: same role, big-pickle-par model
     cursor-implementer)   echo "lane:dev,role:implementer" ;;  # fallback: same role, higher-quality harness (not frontier — no tier:2)
     fallback-implementer) echo "lane:dev,role:implementer" ;;  # same role, different (free-API) model
     frontier)
@@ -106,8 +110,9 @@ role_features() {
 # Agent family (harness+model) for a poller — the durable identity (ADR 0007).
 role_family() {
   case "$1" in
-    nano-implementer)         echo "opencode+nemotron-3-nano" ;;   # tier-0: cheapest implementer (1 concurrent session)
+    nano-implementer)         echo "opencode+nemotron-3-nano" ;;   # tier-0 (disabled): cheapest implementer (1 concurrent session)
     cheap-implementer)        echo "opencode+big-pickle" ;;        # primary cheap implementer (free API)
+    qwen-implementer)         echo "opencode+qwen3-coder-next" ;;  # cheap serial: 80B, big-pickle par (1 concurrent session)
     cursor-implementer)       echo "cursor-agent+composer-2.5" ;;  # fallback: cursor-agent harness, composer-2.5 model
     fallback-implementer)     echo "opencode+nemotron-3-ultra" ;;  # fallback (free API, more capable)
     designer)                 echo "claude-code+opus" ;;           # M19: opus for design judgment
@@ -150,6 +155,12 @@ harness_sweep() {
     cheap-implementer)
       OPENCODE_MODEL="${OPENCODE_PRIMARY_MODEL:-opencode/big-pickle}" \
         eval "${OPENCODE_IMPLEMENTER_CMD:-bash \"$REPO/loop/opencode-implementer.sh\"}" ;;
+    qwen-implementer)
+      # cheap serial: qwen3-coder-next via opencode's ollama provider. Reuses the opencode
+      # implementer wrapper (like big-pickle/nano), different model. 1 concurrent session
+      # ⇒ a single serial sweep, never pooled.
+      OPENCODE_MODEL="${OPENCODE_QWEN_MODEL:-ollama/qwen3-coder-next:cloud}" \
+        eval "${OPENCODE_QWEN_CMD:-bash \"$REPO/loop/opencode-implementer.sh\"}" ;;
     cursor-implementer)
       # fallback: cursor-agent + composer-2.5 (its own harness wrapper). Serial tier.
       CURSOR_MODEL="${CURSOR_IMPL_MODEL:-composer-2.5}" \
