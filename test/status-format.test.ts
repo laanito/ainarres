@@ -176,6 +176,57 @@ describe("formatStatus", () => {
     expect(out).toContain("by grok+grok-build");
     expect(out).toContain("by a4");
   });
+
+  // ── Compact mode (acceptance criteria 1-4) ─────────────────────────────────
+
+  test("compact mode: exact output for mixed board with claimed, no blocked, no abandoned", () => {
+    const board = [
+      { task_id: "t1", stage: "designing" },
+      { task_id: "t2", stage: "done" },
+      { task_id: "t3", stage: "done" },
+      { task_id: "t4", stage: "implementing", claimed_by: "agent-1", abandoned: false },
+    ];
+    const out = formatStatus({ board, feed: [], abandoned: [] }, { lane: "dev", compact: true });
+    expect(out).toBe("status — lane dev (4 tasks)\n  designing:1 done:2 implementing:1\n  blocked:0 claimed:1 active:1 abandoned:0");
+    expect(out).not.toContain("recent events");
+    expect(out).not.toContain("abandoned (");
+    expect(out).not.toContain("total:");
+  });
+
+  test("compact mode: empty board and empty feed/abandoned", () => {
+    const out = formatStatus({}, { compact: true });
+    expect(out).toBe("status — all lanes (0 tasks)\n  (no tasks)\n  blocked:0 claimed:0 active:0 abandoned:0");
+  });
+
+  test("compact mode: blocked and abandoned counters are reflected", () => {
+    const board = [
+      { task_id: "t1", stage: "implementing", blocked: true },
+      { task_id: "t2", stage: "reviewing" },
+    ];
+    const abandoned = [
+      { task_id: "a1", stage: "implementing", claimed_by: "w-1" },
+      { task_id: "a2", stage: "designing", claimed_by: "w-2" },
+    ];
+    const out = formatStatus({ board, abandoned }, { compact: true });
+    expect(out).toContain("blocked:1");
+    expect(out).toContain("abandoned:2");
+    expect(out).toContain("claimed:0");
+    expect(out).toContain("active:0");
+  });
+
+  test("compact mode: no compact option still renders every existing section (regression guard)", () => {
+    const board = [
+      { task_id: "t1", stage: "implementing", claimed_by: "agent-1" },
+    ];
+    const feed = [
+      { created_at: "t5", type: "claimed", task_id: "e5", actor: "a5" },
+    ];
+    const out = formatStatus({ board, feed, abandoned: [] });
+    expect(out).toContain("recent events (showing up to 10):");
+    expect(out).toContain("abandoned (0):");
+    // No compact marker lines appear
+    expect(out).not.toMatch(/^  blocked:\d+ claimed:\d+ active:\d+ abandoned:\d+$/m);
+  });
 });
 
 describe("formatEvents", () => {

@@ -104,11 +104,34 @@ async function callVerb(name, body, token) {
 // fetched view rows (board/feed/abandoned) and returns a one-glance multi-line
 // summary string. No I/O, no fetch, no clock — same input → same output. The
 // `status` subcommand (a follow-up task) will fetch the views and pass them here.
-export function formatStatus({ board = [], feed = [], abandoned = [] }, { lane = null, feedLimit = 10 } = {}) {
+export function formatStatus({ board = [], feed = [], abandoned = [] }, { lane = null, feedLimit = 10, compact = false } = {}) {
   const lines = [];
 
   // 1. Header.
-   lines.push(lane ? `status — lane ${lane} (${board.length} tasks)` : `status — all lanes (${board.length} tasks)`);
+  lines.push(lane ? `status — lane ${lane} (${board.length} tasks)` : `status — all lanes (${board.length} tasks)`);
+
+  if (compact) {
+    // COMPACT THREE-LINE MODE
+    // Line 2: stage tally
+    if (board.length === 0) {
+      lines.push("  (no tasks)");
+    } else {
+      const byStage = new Map();
+      for (const row of board) {
+        const stage = row.stage;
+        byStage.set(stage, (byStage.get(stage) ?? 0) + 1);
+      }
+      const parts = [...byStage.keys()].sort().map(stage => `${stage}:${byStage.get(stage)}`);
+      lines.push(`  ${parts.join(" ")}`);
+    }
+    // Line 3: counters
+    const blockedCount = board.filter(r => r.blocked === true).length;
+    const claimedCount = board.filter(r => r.claimed_by != null).length;
+    const activeCount = board.filter(r => r.claimed_by != null && r.abandoned !== true).length;
+    const abandonedCount = abandoned.length;
+    lines.push(`  blocked:${blockedCount} claimed:${claimedCount} active:${activeCount} abandoned:${abandonedCount}`);
+    return lines.join("\n");
+  }
 
   // 2. Per-stage task summary from board.
   if (board.length === 0) {
@@ -659,7 +682,7 @@ const COMMANDS = {
       for (const r of [b, f, a]) {
         if (!r.httpOk) { emit(r.body ?? { ok: false, code: "http_error", status: r.status }, false); return null; }
       }
-      return formatStatus({ board: b.body, feed: f.body, abandoned: a.body }, { lane, feedLimit });
+      return formatStatus({ board: b.body, feed: f.body, abandoned: a.body }, { lane, feedLimit, compact: values.compact });
     };
 
     // --watch: poll-refresh (ADR 0021 D1 — no LISTEN/NOTIFY, no new infra). Reprint
@@ -778,7 +801,7 @@ const OPTS = {
   board: { lane: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
   feed: { lane: { type: "string" }, task: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
   abandoned: { lane: { type: "string" }, token: { type: "string" } },
-  status: { lane: { type: "string" }, limit: { type: "string" }, watch: { type: "boolean" }, interval: { type: "string" }, token: { type: "string" } },
+  status: { lane: { type: "string" }, limit: { type: "string" }, watch: { type: "boolean" }, interval: { type: "string" }, compact: { type: "boolean" }, token: { type: "string" } },
   events: { lane: { type: "string" }, task: { type: "string" }, family: { type: "string" }, type: { type: "string" }, limit: { type: "string" }, json: { type: "boolean" }, token: { type: "string" } },
   report: { lane: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
   "record-usage": { actor: { type: "string" }, family: { type: "string" }, "from-log": { type: "string" }, data: { type: "string" }, sweep: { type: "string" }, task: { type: "string" }, token: { type: "string" } },
