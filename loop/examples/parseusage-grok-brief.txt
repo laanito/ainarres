@@ -1,0 +1,71 @@
+Teach the PURE `parseUsage(logText, family)` in bin/ainarres.mjs to extract token counts
+from the GROK harness's log, so `grok+grok-build` stops reading "tokens: unknown" in the
+M20 track record — the LAST family still unmeasured. This is a PURE FUNCTION change only —
+no consequence, no auth path, no DB migration, no CLI wiring. It is fully SUBSTRATE-FREE to
+validate (a vitest unit test, no database).
+
+CONTEXT (why): the grok wrapper bridges grok's `_meta` usage (from its --debug-file) into
+the captured sweep log. `parseUsage` already handles claude (`usage.input_tokens`),
+opencode (`step_finish` events), and cursor (`usage.inputTokens`); this adds the grok
+branch. It is the final family.
+
+WHAT EXISTS TODAY (read before coding; do NOT change the other branches):
+- bin/ainarres.mjs exports the PURE `parseUsage(logText, family)`. It dispatches by family
+  regex: `/^claude-code\+/` → parseClaudeUsage; `/^opencode\+/` → parseOpencodeUsage;
+  `/^cursor-agent\+/` → parseCursorUsage; else returns `null` ("unknown", never 0). Return
+  shape on success: `{ tokens: { input, output, cache_read, cache_creation }, model }`.
+  Mirror the existing helper pattern: add a `parseGrokUsage(logText)` and a dispatch line.
+  Tests: test/parse-usage.test.ts.
+- The grok usage lines in the log are NOT pure JSON — they are debug log lines with a
+  PREFIX before the JSON, e.g. (one line):
+    2026-07-07T17:16:30Z DEBUG xai_acp_lib::gateway: received "session/prompt" response: {"stopReason":"end_turn","_meta":{"sessionId":"…","totalTokens":58050,"modelId":"grok-build","inputTokens":57574,"outputTokens":475,"cachedReadTokens":57344,"reasoningTokens":49}}
+  So the JSON must be extracted from the first `{` to end of line, then parsed; the usage is
+  under the top-level `_meta` object.
+- IMPORTANT grok convention (differs from the others): grok's `inputTokens` INCLUDES
+  `cachedReadTokens` (a subset) — `totalTokens = inputTokens + outputTokens`, and
+  `cachedReadTokens` is the cached portion of the input. So to keep the same meaning as the
+  other families (where `input` is the FRESH, non-cache count), subtract: fresh input =
+  inputTokens − cachedReadTokens. Do NOT add reasoningTokens to output (grok's total is
+  input+output, reasoning is not added on top).
+
+THE FEATURE — ONE TASK (pure function; no CLI, no DB):
+
+1. Add `parseGrokUsage(logText)` and dispatch to it when `family` matches `/^grok\+/`
+   (leave the claude/opencode/cursor branches and the `null` default exactly as they are):
+   - Scan `logText` line by line. For each line containing `"_meta"` and `"inputTokens"`,
+     take the substring from the first `{` to the end, JSON.parse it in a try/catch (skip on
+     failure — never throw), and if the parsed object has a `_meta` object with a NUMERIC
+     `_meta.inputTokens`, treat it as a usage record. Keep the LAST such record (matches the
+     claude path's take-last — `record_usage` runs per sweep on the append-only log, so the
+     last `_meta` is the current sweep's).
+   - From that last `_meta`, return:
+     `{ tokens: { input: inputTokens − cachedReadTokens, output: outputTokens,
+                  cache_read: cachedReadTokens, cache_creation: 0 },
+        model: _meta.modelId ?? null }`
+     (treat any missing/non-numeric field as 0 for the arithmetic; `input` clamped at 0 if
+     the subtraction would go negative).
+   - If NO grok `_meta` record is found, return `null` (unknown).
+   - Keep the function PURE and TOTAL: no I/O, no clock, never throws on any input.
+
+ACCEPTANCE — add assertions to test/parse-usage.test.ts. They must FAIL on current main
+(grok logs currently parse to null) and PASS after:
+- Given a log line (with the debug prefix before the JSON):
+    `… response: {"stopReason":"end_turn","_meta":{"totalTokens":58050,"modelId":"grok-build","inputTokens":57574,"outputTokens":475,"cachedReadTokens":57344,"reasoningTokens":49}}`
+  `parseUsage(<that log>, "grok+grok-build")` deep-equals
+    { tokens: { input: 230, output: 475, cache_read: 57344, cache_creation: 0 }, model: "grok-build" }
+  (fresh input = 57574 − 57344 = 230).
+- Given TWO grok `_meta` lines (e.g. a reviewer sweep then an integrator sweep), the LAST
+  one wins.
+- `parseUsage("2026 DEBUG some other line\nnot json\n", "grok+grok-build")` returns `null`.
+- A claude/opencode/cursor-shaped log handed to a `grok+` family returns `null`.
+- The existing claude, opencode, AND cursor family tests are UNCHANGED.
+
+VALIDATE (substrate-free — the ONLY validate; needs NO database, NO docker, NO make, NO
+psql. Run it verbatim; it must fail on main and pass after your change):
+    npx vitest run test/parse-usage.test.ts
+
+CONSTRAINTS:
+- No DB migration. No new view. No CLI wiring. Do NOT change record_usage, any verb, view,
+  or auth path. Only bin/ainarres.mjs `parseUsage` + test/parse-usage.test.ts.
+- Do NOT change the claude/opencode/cursor branches. Keep `parseUsage` PURE and TOTAL.
+- JavaScript only (bin/ainarres.mjs is ESM); vitest tests.

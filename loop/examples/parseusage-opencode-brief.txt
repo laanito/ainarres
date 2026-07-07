@@ -1,0 +1,72 @@
+Teach the PURE `parseUsage(logText, family)` in bin/ainarres.mjs to extract token counts
+from the OPENCODE harness's JSON event stream, so opencode families (big-pickle, qwen3-
+coder-next, nemotron-*) stop reading "tokens: unknown" in the M20 track record. This is a
+PURE FUNCTION change only — no consequence, no auth path, no DB migration, no CLI wiring.
+It is fully SUBSTRATE-FREE to validate (a vitest unit test, no database).
+
+CONTEXT (why): the loop's opencode wrapper now runs `opencode run … --format json`, so an
+opencode sweep's captured log is a stream of newline-delimited JSON events. `parseUsage`
+today only understands the Anthropic/claude shape (`usage.input_tokens`), so it returns
+null for opencode logs → the family reads as "unknown". This slice adds an opencode branch.
+
+WHAT EXISTS TODAY (read before coding; do NOT change the claude behavior):
+- bin/ainarres.mjs exports the PURE `parseUsage(logText, family)` (search for it). It scans
+  the log for the Anthropic usage shape and returns either
+  `{ tokens: { input, output, cache_read, cache_creation }, model }` or `null` when nothing
+  parseable is found (null is deliberate — "unknown", never 0). Its unit tests live in
+  test/parse-usage.test.ts. Two existing tests assert it returns null for an opencode family
+  on a claude-shaped log and on plain text — those MUST still pass.
+- The opencode JSON event stream contains, per agent STEP, one event shaped like:
+    {"type":"step_finish", … ,"part":{ … ,"type":"step-finish",
+      "tokens":{"total":7858,"input":7790,"output":44,"reasoning":24,
+                "cache":{"write":0,"read":0}},"cost":0}}
+  Token counts are PER STEP (NOT cumulative) — a multi-step run emits several `step_finish`
+  events and the session total is the SUM across them. (Verified on a real run: three steps
+  had input 7790/64/131 — not monotonic — with cache.read carrying the re-read context.)
+
+THE FEATURE — ONE TASK (pure function; no CLI, no DB):
+
+1. Extend `parseUsage(logText, family)` so that when `family` is a string beginning with
+   `"opencode+"`, it parses the opencode JSON-event shape INSTEAD of the Anthropic scan
+   (leave the existing claude/Anthropic path, and the `null` returns for other families,
+   exactly as they are):
+   - Scan `logText` line by line. For each line that parses as JSON (wrap each JSON.parse in
+     try/catch; skip non-JSON / malformed lines — never throw) whose top-level `type` is
+     `"step_finish"` and which has a `part.tokens` object, ACCUMULATE across all such events:
+       input          += part.tokens.input          (numbers only; treat missing as 0)
+       output         += part.tokens.output + part.tokens.reasoning   (fold reasoning into
+                         output — it is generated-token work; missing counts as 0)
+       cache_read     += part.tokens.cache.read
+       cache_creation += part.tokens.cache.write
+   - If AT LEAST ONE `step_finish`-with-`part.tokens` event was found, return
+     `{ tokens: { input, output, cache_read, cache_creation }, model: null }`.
+   - If NONE was found (e.g. a claude-shaped or plain-text log handed to an opencode family),
+     return `null` (unknown — preserves the two existing null tests).
+   - Keep the function PURE and TOTAL: no I/O, no clock, never throws on any input.
+
+ACCEPTANCE — add assertions to test/parse-usage.test.ts. They must FAIL on current main
+(opencode logs currently parse to null) and PASS after. Build the fixture from these three
+REAL `step_finish` events (one JSON object per line; you may also interleave unrelated event
+lines and one malformed line to prove they're skipped):
+    line A part.tokens: {"total":7858,"input":7790,"output":44,"reasoning":24,"cache":{"write":0,"read":0}}
+    line B part.tokens: {"total":7925,"input":64,"output":44,"reasoning":9,"cache":{"write":0,"read":7808}}
+    line C part.tokens: {"total":7952,"input":131,"output":3,"reasoning":10,"cache":{"write":0,"read":7808}}
+- `parseUsage(<that opencode log>, "opencode+big-pickle")` deep-equals
+    { tokens: { input: 7985, output: 134, cache_read: 15616, cache_creation: 0 }, model: null }
+  (input 7790+64+131=7985; output (44+44+3)+(24+9+10)=91+43=134; cache_read 0+7808+7808=15616).
+- `parseUsage("not json\n{oops\n", "opencode+qwen3-coder-next")` returns `null` (malformed
+  lines skipped, no events found → unknown).
+- The TWO existing opencode-family null tests still pass (a claude-shaped log and a plain
+  "commit only …" log handed to an opencode family both return null).
+- The existing claude-family tests are UNCHANGED (the claude/Anthropic path is untouched).
+
+VALIDATE (substrate-free — the ONLY validate; needs NO database, NO docker, NO make, NO
+psql. Run it verbatim; it must fail on main and pass after your change):
+    npx vitest run test/parse-usage.test.ts
+
+CONSTRAINTS:
+- No DB migration. No new view. No CLI wiring. Do NOT change record_usage, any verb, view,
+  or auth path. Only bin/ainarres.mjs `parseUsage` + test/parse-usage.test.ts.
+- Do NOT change the claude/Anthropic branch or the null-return behavior for grok+*/cursor-*
+  families (those stay "unknown" — separate future slices).
+- Keep `parseUsage` PURE and TOTAL. JavaScript only (bin/ainarres.mjs is ESM); vitest tests.
