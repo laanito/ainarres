@@ -62,6 +62,11 @@ fi
 # PATH-resolved child commands hit the shims; the absolute "$OPENCODE" is unaffected.
 export PATH="$REPO/loop/guard-bin:$PATH"
 
+# `--format json` makes opencode emit its raw JSON event stream to stdout instead of
+# formatted text. The agent behaves identically (format is output-only); the payoff is
+# that `step_finish` events carry per-step `part.tokens` (input/output/reasoning/cache),
+# which the driver's record_usage → parseUsage can sum into a real token count for the
+# M20 track record (opencode families read "unknown" today). Revert with OPENCODE_FORMAT=default.
 exec "$OPENCODE" run \
   "Run the AINARRES implementer loop until a claim returns code:empty, then stop. Everything you need is in each task." \
-  --agent ainarres-implementer -m "$MODEL"
+  --agent ainarres-implementer -m "$MODEL" --format "${OPENCODE_FORMAT:-json}"
