@@ -118,6 +118,31 @@ override with `GROK_FRONTIER_CMD` / `OPENCODE_IMPLEMENTER_CMD` / `CURSOR_IMPLEME
 `cursor-agent` authenticates via `CURSOR_API_KEY` (or a prior `cursor-agent login`).
 Per-tier sweep logs stream to `loop/run/<tier>.log`.
 
+**cursor requires a one-time allowlist.** The wrapper runs cursor with `--trust` (not
+`--force`/"Run Everything", which the org admin disables). cursor's `approvalMode` is
+`allowlist`, so file edits run headless but SHELL commands run only if pre-allowed in
+`~/.cursor/cli-config.json` → `permissions.allow`. Add the implementer's commands once. **Essential**: `Shell(git)` (covers all git
+subcommands), `Shell(npx)` (the vitest validate), `Shell(node)` (`node bin/ainarres.mjs`).
+The rest below are **read-only insurance** — a model that reaches for shell `cat`/`grep`
+instead of cursor's native Read/Grep tools would otherwise block mid-task:
+
+```json
+"permissions": {
+  "allow": [
+    "Shell(git)", "Shell(npx)", "Shell(node)",
+    "Shell(cat)", "Shell(grep)", "Shell(head)", "Shell(tail)",
+    "Shell(find)", "Shell(pwd)", "Shell(wc)", "Shell(ls)"
+  ],
+  "deny": []
+}
+```
+
+Do NOT add `make`/`docker`/`psql`/`dbmate` — the guard-bin denies those for cursor anyway;
+nor destructive ops (`rm`/`mv`/`chmod`) — cursor's Write/Edit tools handle mutations.
+Without the essentials a cursor sweep claims a task but its git/npx calls are blocked and it
+can't advance (the task falls to the next tier). Compound `a && b` shell calls may need each
+command allowed — if cursor stalls on those, have it run them separately or widen the list.
+
 ## Prove the plumbing (deterministic, no LLMs)
 
 ```sh
