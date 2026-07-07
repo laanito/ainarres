@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { formatStatus, statusJson, formatEvents, formatReport, fmtTokens } from "../bin/ainarres.mjs";
+import { formatStatus, statusJson, formatEvents, formatReport, reportJson, fmtTokens } from "../bin/ainarres.mjs";
 
 // Pure unit test: no substrate, no network, no DB, no token. We import the
 // formatter directly from the CLI module — which must NOT run the CLI on import
@@ -600,5 +600,75 @@ describe("fmtTokens", () => {
     expect(fmtTokens(950)).toBe("950");
     expect(fmtTokens(1234)).toBe("1.2k");
     expect(fmtTokens(1_200_000)).toBe("1.2M");
+  });
+});
+
+describe("reportJson", () => {
+  test("(1) shipped task with pr, cross-family review, and full attribution", () => {
+    const board = [
+      { task_id: "T1", is_terminal: true },
+    ];
+    const timeline = [
+      { task_id: "T1", type: "transition", family: "opencode+big-pickle", data: { from: "implementing", to: "reviewing" } },
+      { task_id: "T1", type: "transition", family: "claude-code+sonnet", data: { from: "reviewing", to: "integrating" } },
+      { task_id: "T1", type: "transition", family: "grok+grok-build", data: { from: "integrating", to: "validating" } },
+      { task_id: "T1", type: "transition", family: "opencode+big-pickle", data: { artifacts: [{ type: "pr", url: "https://x/pr/1" }] } },
+    ];
+    const result = reportJson({ board, timeline }, { lane: "dev" });
+    expect(result.shipped[0]).toEqual({
+      task_id: "T1",
+      pr: "https://x/pr/1",
+      implemented: "opencode+big-pickle",
+      reviewed: "claude-code+sonnet",
+      integrated: "grok+grok-build",
+      crossFamilyReview: true,
+    });
+  });
+
+  test("(2) same-family review sets crossFamilyReview to false", () => {
+    const board = [
+      { task_id: "T1", is_terminal: true },
+    ];
+    const timeline = [
+      { task_id: "T1", type: "transition", family: "same-family", data: { from: "implementing", to: "reviewing" } },
+      { task_id: "T1", type: "transition", family: "same-family", data: { from: "reviewing", to: "integrating" } },
+    ];
+    const result = reportJson({ board, timeline });
+    expect(result.shipped[0].crossFamilyReview).toBe(false);
+  });
+
+  test("(3) no args returns empty shape", () => {
+    expect(reportJson()).toEqual({
+      lane: null,
+      shipped: [],
+      trackRecord: [],
+      governance: [],
+      auditFlags: [],
+      governanceActions: [],
+    });
+  });
+
+  test("(4) pass-through of trackRecord, governance, auditFlags, governanceActions unchanged", () => {
+    const trackRecord = [{ family: "f", capability: "c", delivered: 1 }];
+    const governance = [{ family: "f", capability: "c", banned: false }];
+    const auditFlags = [{ family: "f", capability: "c", flag_count: 1 }];
+    const governanceActions = [{ action: "warn", family: "f", capability: "c" }];
+    const result = reportJson({ trackRecord, governance, auditFlags, governanceActions });
+    expect(result.trackRecord).toBe(trackRecord);
+    expect(result.governance).toBe(governance);
+    expect(result.auditFlags).toBe(auditFlags);
+    expect(result.governanceActions).toBe(governanceActions);
+  });
+
+  test("(5) JSON.stringify(reportJson({})) round-trips to empty shape (valid JSON, no undefined/functions)", () => {
+    const parsed = JSON.parse(JSON.stringify(reportJson({})));
+    expect(parsed).toEqual({
+      lane: null,
+      shipped: [],
+      trackRecord: [],
+      governance: [],
+      auditFlags: [],
+      governanceActions: [],
+    });
   });
 });
