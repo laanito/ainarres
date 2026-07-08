@@ -130,5 +130,7 @@ out-of-scope, [0022](../decisions/0022-v5-scope-governance.md) § deferred):
 
 ## Next action
 
-Land **v5 M20–M22** first. Return here to promote the **v6** candidate (intaker + auditor
-roles) into a scope ADR + plan when v5 is done; **v7** (API + service) follows on top of v6.
+v5 (M20–M22) landed. The **v6** candidate has graduated to a committed scope
+([ADR 0023](../decisions/0023-v6-scope-seat-the-bookends.md): seat both bookends — auditor
+operational facet first, then the intaker). Next: the two design notes + `plans/v6-plan.md`.
+**v7** (API + service) remains a candidate here, to promote on top of v6.
