@@ -6,6 +6,10 @@
 > v5 [0022](../decisions/0022-v5-scope-governance.md)). This file is where the *next* candidates
 > are parked so the thinking isn't lost. Each item graduates to its own scope ADR when we
 > commit to it. Nothing here is a promise.
+>
+> **Compass:** the long-run destination these candidates steer toward — AINARRES as
+> general-purpose, human+agent work coordination over a kanban hierarchy — lives in
+> [`vision.md`](vision.md). This file is the *route*; that one is the *destination*.
 
 ## The throughline
 

@@ -32,6 +32,20 @@ M23 adds **no new revocation mechanism** and **no auto-penalty** (ADR 0023 invar
 a **watch** (computed, read-only), a **family-scoped flag verb** for the auditor's recorded
 judgment, and the **surface** that routes a human's attention. The same auditor, watching more.
 
+## Fit with the vision: by-hand watch now, epic-altitude pull-work later
+
+The guiding [`vision.md`](../analysis/vision.md) makes audit **first-class pull-work at the
+epic altitude** — an auditor (in any service) claims a **completed epic** and judges it against
+its request. M23 does **not** build that pull-queue (its value is federation across services,
+which is v7 — the **shortcut** taken on purpose). In v6 the operational watch is exercised **by
+hand**: a human `role:auditor` reads the watch views and records flags. What v6 **banks toward
+the vision**, cheaply: the flag verbs are the **recording** mechanism a future pulled audit will
+call unchanged; **judgments are append-only** (the vision's federated-truth rule — two auditors
+flagging one gap *aggregate*, never corrupt); and audit **anchors to a delivery** (the
+brief-group / lightweight epic from [`intake.md`](intake.md), closing M22 D8) rather than a
+lone task. When audit becomes queued pull-work in v7, these shapes carry over; only the
+*distribution* (by-hand → claimed) changes.
+
 ## The two failure modes, and the honest mechanics of catching them
 
 The retro framed the spinning worker as the motivator for a spend watch. Designing it forces a
