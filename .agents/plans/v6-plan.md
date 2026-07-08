@@ -9,7 +9,26 @@
 > [`design/reflexive-revocation.md`](../design/reflexive-revocation.md)). The two milestone
 > design notes settle the open questions: [`design/auditor-operational.md`](../design/auditor-operational.md)
 > (M23), [`design/intake.md`](../design/intake.md) (M24). Each milestone is one PR-sized slice
-> that ends green, then a blog article (continues the *AINARRES* series).
+> that ends green, then a blog article (continues the *AINARRES* series). Steers by the
+> [`analysis/vision.md`](../analysis/vision.md) compass — general-purpose work coordination over
+> a kanban hierarchy (`epic = lane = the delivery unit`) — banking its cheap forward-compatible
+> decisions while taking deliberate shortcuts (below).
+
+## The vision, and the shortcuts v6 takes (banked vs. deferred)
+
+Per [`vision.md`](../analysis/vision.md), the long-run delivery unit is an **epic** and the
+bookends are **pull-work** (intakers pull stories → epics; auditors pull completed epics). v6
+does **not** build that; it banks the *cheap* pieces and defers the *expensive* (federation)
+ones:
+
+- **Banked (fits the vision, costs little):** a **delivery = an epic**, stood in by a
+  **brief-group** (M24's `payload.brief`); **audit anchors to the delivery**, not a lone task
+  (upgrading M22 D8); **idempotent work-item creation** (one open brief per request) +
+  **append-only judgments** (the federated-truth rule) wherever v6 writes.
+- **Deferred (value is federation / the service — v7+):** dynamic per-story epics + the goal
+  tier; the intake **channel/API**; the audit **pull-queue** (audit exercised **by hand** in
+  v6); the demand-scaling supervisor; the web UI. The bookends run on the **bootstrap project**,
+  by hand.
 
 ## Objective
 

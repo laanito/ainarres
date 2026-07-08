@@ -19,6 +19,20 @@ it a role and gives the brief a home, so the full chain — Customer → **Intak
 Implementer/Reviewer/Integrator → Auditor — is named end to end. It is **cognition, not a
 channel**: the reasoning that shapes a request, not the pipe that carries it (that pipe is v7).
 
+## Fit with the vision: the brief is a lightweight epic
+
+The guiding [`vision.md`](../analysis/vision.md) sees the delivery unit as an **epic**
+(`lane` = "an initiative within a project"): a story in, an epic-worth of tasks out, audited as
+a whole against the request. M24 does **not** build dynamic per-story epics (that is the
+service/UI era) — it takes the **cheap forward-compatible shortcut**: the intaker's brief
+**groups** its decomposed task-set (the `payload.brief` link, D3), so the brief-group **is the
+v6 stand-in for an epic** — the epic model in miniature, on the existing `dev` lane. This banks
+two vision decisions for free: the **delivery has an identity** (the brief) the auditor can
+anchor to (D3, closing M22 D8 → [`auditor-operational.md`](auditor-operational.md)), and
+**intake produces a delivery**, not a loose task. When epics become first-class and dynamic
+(a lane per story, fed through the future channel), the brief graduates to the epic's
+definition — the shape doesn't change, only its lifecycle.
+
 ## The result: two-tier creation needs NO `create_task` change
 
 The M24 open question was "new workflow vs. a `proposed` task state vs. a first-class brief
