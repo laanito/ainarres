@@ -590,6 +590,124 @@ describe("formatReport", () => {
     expect(out).not.toContain("RECOMMEND PERMANENT BAN");
     expect(out).not.toContain("governance actions:");
   });
+
+  // ── M23 Slice B — operational watch (health & spend) ──────────────────────
+
+  test("operational block: empty groups print the header + single all-clear line, existing sections still render, no throw", () => {
+    const out = formatReport({});
+    expect(out).toContain("operational (v6 — health & spend watch):");
+    expect(out).toContain("  (all clear — no health, spend, or operational-flag anomalies)");
+    // The all-clear line REPLACES the three groups — no group lines at all.
+    expect(out).not.toContain("  - health: ");
+    expect(out).not.toContain(" the peer median");
+    expect(out).not.toContain(" — looped ");
+    // Pre-existing sections still render.
+    expect(out).toContain("shipped (");
+    expect(out).toContain("family track record");
+    expect(out).toContain("governance (v5");
+    expect(() => formatReport({})).not.toThrow();
+  });
+
+  test("operational block is the LAST section, after the entire governance section", () => {
+    const out = formatReport({
+      board: [{ task_id: "t1", stage: "implementing", claimed_by: "fam-x", abandoned: true }],
+      governanceActions: [{ action: "lift", family: "f", capability: "c", reason: "ok" }],
+    });
+    const govIdx = out.indexOf("governance actions:");
+    const opIdx = out.indexOf("operational (v6 — health & spend watch):");
+    const healthIdx = out.indexOf("  - health: t1 stalled in implementing, held by fam-x (review)");
+    expect(govIdx).toBeGreaterThan(-1);
+    expect(opIdx).toBeGreaterThan(govIdx);
+    expect(healthIdx).toBeGreaterThan(opIdx);
+    // The health line is the very last line of the report.
+    expect(out.trimEnd().endsWith("held by fam-x (review)")).toBe(true);
+  });
+
+  test("health: abandoned board rows render stalled-in lines sorted by task_id, em dash when unclaimed", () => {
+    const board = [
+      { task_id: "t2", stage: "reviewing", claimed_by: null, abandoned: true },
+      { task_id: "t1", stage: "implementing", claimed_by: "fam-x", abandoned: true },
+      { task_id: "t3", stage: "implementing", claimed_by: "fam-y", abandoned: false },
+    ];
+    const out = formatReport({ board });
+    const healthLines = out.split("\n").filter(l => l.startsWith("  - health: "));
+    expect(healthLines).toEqual([
+      "  - health: t1 stalled in implementing, held by fam-x (review)",
+      "  - health: t2 stalled in reviewing, held by — (review)",
+    ]);
+    // Not-abandoned rows are not health signals.
+    expect(healthLines.join("\n")).not.toContain("t3");
+  });
+
+  test("spend: overspending line carries fmtTokens, the × multiplier, and ends (cost)", () => {
+    const spendAnomalies = [
+      { family: "c", capability: "role:implementer", anomaly: "overspending", tokens_per_delivery: 5000, peer_median: 120, multiple_over_median: 41.67, overspend_multiple: 5, delivered: 1, usage_events: 1 },
+    ];
+    const out = formatReport({ spendAnomalies });
+    const line = out.split("\n").find(l => l.includes("c / role:implementer: overspending"));
+    expect(line).toBeTruthy();
+    expect(line).toContain("5.0k/delivery");
+    expect(line).toContain("41.67× the peer median");
+    expect(line.endsWith("(cost)")).toBe(true);
+  });
+
+  test("spend: no_delivery_spend reads burned, with usage event count and (review)", () => {
+    const spendAnomalies = [
+      { family: "d", capability: "role:reviewer", anomaly: "no_delivery_spend", tokens_per_delivery: null, delivered: 0, usage_events: 2 },
+    ];
+    const out = formatReport({ spendAnomalies });
+    expect(out).toContain("  - d / role:reviewer: burned — 2 usage event(s), 0 delivered (review)");
+  });
+
+  test("spend: rows sorted by family then capability", () => {
+    const spendAnomalies = [
+      { family: "b", capability: "role:z", anomaly: "overspending", multiple_over_median: 1 },
+      { family: "a", capability: "role:y", anomaly: "overspending", multiple_over_median: 1 },
+      { family: "a", capability: "role:x", anomaly: "overspending", multiple_over_median: 1 },
+    ];
+    const out = formatReport({ spendAnomalies });
+    const ia = out.indexOf("a / role:x");
+    const ib = out.indexOf("a / role:y");
+    const ic = out.indexOf("b / role:z");
+    expect(ia).toBeGreaterThan(-1);
+    expect(ib).toBeGreaterThan(ia);
+    expect(ic).toBeGreaterThan(ib);
+  });
+
+  test("flags: spinning renders (review), overspending kind ends (cost), capped at 10, order preserved", () => {
+    const flags = [
+      { family: "e", capability: "role:implementer", kind: "spinning", detail: "looped on a hallucinated tool" },
+    ];
+    const out = formatReport({ operationalFlags: flags });
+    expect(out).toContain("  - e / role:implementer: spinning — looped on a hallucinated tool (review)");
+
+    const out2 = formatReport({
+      operationalFlags: [{ family: "e", capability: "role:implementer", kind: "overspending", detail: "spend spike" }],
+    });
+    expect(out2).toContain("  - e / role:implementer: overspending — spend spike (cost)");
+
+    // Cap at the 10 most recent; given (newest-first) order preserved.
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      family: `f${i}`, capability: "role:implementer", kind: "health", detail: `d${i}`,
+    }));
+    const out3 = formatReport({ operationalFlags: many });
+    const flagLines = out3.split("\n").filter(l => l.includes(": health — d"));
+    expect(flagLines.length).toBe(10);
+    expect(flagLines[0]).toContain("f0");
+    expect(flagLines[9]).toContain("f9");
+    expect(flagLines.join("\n")).not.toContain("f10");
+    expect(flagLines.join("\n")).not.toContain("f11");
+  });
+
+  test("overspending never reads as a ban recommendation in the operational block", () => {
+    const spendAnomalies = [
+      { family: "c", capability: "role:implementer", anomaly: "overspending", tokens_per_delivery: 5000, multiple_over_median: 41.67 },
+    ];
+    const out = formatReport({ spendAnomalies });
+    const opSection = out.slice(out.indexOf("operational (v6 — health & spend watch):"));
+    expect(opSection).not.toContain("BAN");
+    expect(opSection).not.toContain("ban");
+  });
 });
 
 describe("fmtTokens", () => {
@@ -645,6 +763,7 @@ describe("reportJson", () => {
       governance: [],
       auditFlags: [],
       governanceActions: [],
+      operational: { health: [], spend: [], flags: [] },
     });
   });
 
@@ -669,6 +788,53 @@ describe("reportJson", () => {
       governance: [],
       auditFlags: [],
       governanceActions: [],
+      operational: { health: [], spend: [], flags: [] },
     });
+  });
+
+  // ── M23 Slice B — operational watch (health & spend) ──────────────────────
+
+  test("(6) operational field: health from abandoned board rows (family null fallback, sorted), spend and flags passed through", () => {
+    const board = [
+      { task_id: "t2", stage: "reviewing", claimed_by: null, abandoned: true },
+      { task_id: "t1", stage: "implementing", claimed_by: "fam-x", abandoned: true },
+      { task_id: "t3", stage: "implementing", claimed_by: "fam-y", abandoned: false },
+    ];
+    const spendAnomalies = [{ family: "c", capability: "role:implementer", anomaly: "overspending", tokens_per_delivery: 5000 }];
+    const operationalFlags = [{ family: "e", capability: "role:implementer", kind: "spinning", detail: "looped" }];
+    const result = reportJson({ board, spendAnomalies, operationalFlags });
+    expect(result.operational).toEqual({
+      health: [
+        { task_id: "t1", stage: "implementing", family: "fam-x" },
+        { task_id: "t2", stage: "reviewing", family: null },
+      ],
+      spend: spendAnomalies,
+      flags: operationalFlags,
+    });
+  });
+
+  test("(6) operational flags capped at 10 in reportJson, newest-first order preserved", () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      family: `f${i}`, capability: "role:implementer", kind: "health", detail: `d${i}`,
+    }));
+    const result = reportJson({ operationalFlags: many });
+    expect(result.operational.flags.length).toBe(10);
+    expect(result.operational.flags[0].family).toBe("f0");
+    expect(result.operational.flags[9].family).toBe("f9");
+  });
+
+  test("(6) pre-existing reportJson fields are unchanged by the operational field", () => {
+    const trackRecord = [{ family: "f", capability: "c", delivered: 1 }];
+    const governance = [{ family: "f", capability: "c", banned: false }];
+    const auditFlags = [{ family: "f", capability: "c", flag_count: 1 }];
+    const governanceActions = [{ action: "warn", family: "f", capability: "c" }];
+    const board = [{ task_id: "s1", is_terminal: true }];
+    const result = reportJson({ board, timeline: [], trackRecord, governance, auditFlags, governanceActions });
+    expect(result.trackRecord).toBe(trackRecord);
+    expect(result.governance).toBe(governance);
+    expect(result.auditFlags).toBe(auditFlags);
+    expect(result.governanceActions).toBe(governanceActions);
+    expect(result.shipped).toEqual([{ task_id: "s1", pr: null, implemented: null, reviewed: null, integrated: null, crossFamilyReview: false }]);
+    expect(Object.keys(result)).toEqual(["lane", "shipped", "trackRecord", "governance", "auditFlags", "governanceActions", "operational"]);
   });
 });
