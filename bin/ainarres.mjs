@@ -319,6 +319,13 @@ export function fmtTokens(n) {
   return String(v);
 }
 
+// Operational tag for the M23 watch block (design D5): an overspending signal is a
+// COST signal, never a ban recommendation -> "cost"; everything else (spinning,
+// burned, health, integrity) -> "review". Pure.
+function opTag(kind) {
+  return kind === "overspending" ? "cost" : "review";
+}
+
 // Format seconds-to-heal for a temporary ban (v5 governance). Pure. Returns a
 // human string like "1h 30m" or null when the value is absent/invalid.
 function fmtHeal(secs) {
@@ -328,7 +335,7 @@ function fmtHeal(secs) {
   return `${h}h ${m}m`;
 }
 
-export function formatReport({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [] } = {}, { lane = null } = {}) {
+export function formatReport({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [], spendAnomalies = [], operationalFlags = [] } = {}, { lane = null } = {}) {
   const lines = [lane ? `end-of-run report — lane ${lane}` : "end-of-run report — all lanes"];
 
   // What shipped: tasks at a terminal stage.
@@ -491,13 +498,44 @@ export function formatReport({ board = [], timeline = [], trackRecord = [], gove
     }
   }
 
+  // M23 Slice B — operational watch (v6 — health & spend): stalled/stranded claims
+  // derived from the board (no extra fetch), spend anomalies (api.spend_anomalies)
+  // and operational flags (api.operational_flags). Always the LAST section, after
+  // the entire governance section. Pure, null-guarded, never throws. Overspending
+  // reads as a COST signal ("cost"), never as a ban recommendation; everything else
+  // reads as "review".
+  lines.push("operational (v6 — health & spend watch):");
+  const healthRows = board
+    .filter(r => r && r.abandoned === true)
+    .sort((a, b) => (a.task_id ?? "").localeCompare(b.task_id ?? ""));
+  const spendRows = [...spendAnomalies].sort((a, b) =>
+    (a.family ?? "").localeCompare(b.family ?? "") || (a.capability ?? "").localeCompare(b.capability ?? ""));
+  const flagRows = operationalFlags.slice(0, 10);
+  if (healthRows.length === 0 && spendRows.length === 0 && flagRows.length === 0) {
+    lines.push("  (all clear — no health, spend, or operational-flag anomalies)");
+  } else {
+    for (const r of healthRows) {
+      lines.push(`  - health: ${r.task_id} stalled in ${r.stage}, held by ${r.claimed_by ?? "—"} (review)`);
+    }
+    for (const r of spendRows) {
+      if (r.anomaly === "no_delivery_spend") {
+        lines.push(`  - ${r.family} / ${r.capability}: burned — ${r.usage_events} usage event(s), 0 delivered (review)`);
+      } else {
+        lines.push(`  - ${r.family} / ${r.capability}: overspending — ${fmtTokens(r.tokens_per_delivery)}/delivery, ${r.multiple_over_median}× the peer median (cost)`);
+      }
+    }
+    for (const r of flagRows) {
+      lines.push(`  - ${r.family} / ${r.capability}: ${r.kind} — ${r.detail} (${opTag(r.kind)})`);
+    }
+  }
+
   return lines.join("\n");
 }
 
 // Pure, TOTAL JSON shaper for the end-of-run report. Same two-arg signature as
 // formatReport: rows in (already fetched), plain object out (no I/O, no clock,
 // never throws). Mirrors the same structure report --json will emit.
-export function reportJson({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [] } = {}, { lane = null } = {}) {
+export function reportJson({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [], spendAnomalies = [], operationalFlags = [] } = {}, { lane = null } = {}) {
   const shipped = board
     .filter((r) => r.is_terminal === true)
     .map((row) => {
@@ -513,7 +551,25 @@ export function reportJson({ board = [], timeline = [], trackRecord = [], govern
         crossFamilyReview: implemented != null && reviewed != null && reviewed !== implemented,
       };
     });
-  return { lane, shipped, trackRecord, governance, auditFlags, governanceActions };
+  return {
+    lane,
+    shipped,
+    trackRecord,
+    governance,
+    auditFlags,
+    governanceActions,
+    // M23 Slice B — operational watch: health derived from the board (family is the
+    // JSON null fallback here, NOT the em dash used in the text rendering), spend
+    // passed through as given, flags capped at the 10 most recent.
+    operational: {
+      health: board
+        .filter(r => r && r.abandoned === true)
+        .map(row => ({ task_id: row.task_id, stage: row.stage, family: row.claimed_by ?? null }))
+        .sort((a, b) => (a.task_id ?? "").localeCompare(b.task_id ?? "")),
+      spend: spendAnomalies,
+      flags: operationalFlags.slice(0, 10),
+    },
+  };
 }
 
 // The human-readable gist of an event's structured data — the verdict/reason the
@@ -891,13 +947,17 @@ const COMMANDS = {
     // error) leaves the record section empty rather than failing the whole report.
     // The governance view (v5) is similarly unfiltered and degrades to [] on error.
     // M22: audit_flags and governance_actions are also unfiltered and degrade to [].
-    const [b, t, tr, gov, af, ga] = await Promise.all([
+    // M23: spend_anomalies and operational_flags are unfiltered and degrade to [] —
+    // a substrate without them still yields a full report.
+    const [b, t, tr, gov, af, ga, sa, of] = await Promise.all([
       restGet(`board?${boardQ}`, token),
       restGet(`timeline?${tlQ}`, token),
       restGet(`family_track_record?order=family.asc,capability.asc`, token),
       restGet(`governance_status?order=family.asc,capability.asc`, token),
       restGet(`audit_flags?order=family.asc,capability.asc`, token),
       restGet(`governance_actions?order=created_at.desc`, token),
+      restGet(`spend_anomalies?order=family.asc,capability.asc`, token),
+      restGet(`operational_flags?order=created_at.desc`, token),
     ]);
     for (const r of [b, t]) {
       if (!r.httpOk) { emit(r.body ?? { ok: false, code: "http_error", status: r.status }, false); return; }
@@ -906,10 +966,12 @@ const COMMANDS = {
     const governance = gov.httpOk && Array.isArray(gov.body) ? gov.body : [];
     const auditFlags = af.httpOk && Array.isArray(af.body) ? af.body : [];
     const governanceActions = ga.httpOk && Array.isArray(ga.body) ? ga.body : [];
+    const spendAnomalies = sa.httpOk && Array.isArray(sa.body) ? sa.body : [];
+    const operationalFlags = of.httpOk && Array.isArray(of.body) ? of.body : [];
     if (values.json) {
-      process.stdout.write(`${JSON.stringify(reportJson({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions }, { lane }), null, 2)}\n`);
+      process.stdout.write(`${JSON.stringify(reportJson({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions, spendAnomalies, operationalFlags }, { lane }), null, 2)}\n`);
     } else {
-      process.stdout.write(`${formatReport({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions }, { lane })}\n`);
+      process.stdout.write(`${formatReport({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions, spendAnomalies, operationalFlags }, { lane })}\n`);
     }
   },
 
