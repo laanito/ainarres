@@ -21,7 +21,7 @@ cd "$REPO"
 : "${AINARRES_TOKEN:?grok-frontier: AINARRES_TOKEN must be set by the poller/driver}"
 : "${AINARRES_BASE_URL:?grok-frontier: AINARRES_BASE_URL must be set (from loop.env)}"
 
-MODEL="${GROK_MODEL:-grok-build}"
+MODEL="${GROK_MODEL:-grok-4.5}"
 
 # Resolve the grok binary robustly (pollers run in a non-interactive shell whose PATH
 # may lack ~/.grok/bin): explicit GROK_BIN, else PATH, else the known install path.

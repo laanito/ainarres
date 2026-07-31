@@ -30,7 +30,7 @@ loop/
 | `cursor-implementer` | `cursor-agent + composer-2.5` | implementer (fallback, higher quality; not frontier) |
 | `fallback-implementer` | `opencode + nemotron-3-ultra` (free API) | implementer (fallback) |
 | `designer` | `claude-code + opus` | designer (one-shot decomposition) |
-| `frontier` | `grok + grok-build` | reviewer + the **single integrator** + **escalated** implementer (`tier:2`) |
+| `frontier` | `grok + grok-4.5` | reviewer + the **single integrator** + **escalated** implementer (`tier:2`) |
 | `frontier-claude-reviewer` | `claude-code + sonnet` | reviewer (M19 peer, **never** integrates) |
 
 The driver sweeps the tiers **in this order, in rounds** (`roles.sh::LOOP_TIERS`).
