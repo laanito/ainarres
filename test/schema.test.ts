@@ -19,6 +19,7 @@ describe("domain tables", () => {
     "governance_policy",
     "governance_strikes",
     "lanes",
+    "operational_flags",
     "projects",
     "stages",
     "tasks",
