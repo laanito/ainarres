@@ -1,0 +1,126 @@
+Surface the M23 AUDITOR OPERATIONAL FACET in the END-OF-RUN REPORT: add an "operational"
+block that shows (a) pipeline HEALTH anomalies (stalled/stranded claims), (b) token SPEND
+anomalies (overspenders and burned-but-shipped-nothing), and (c) the auditor's open
+OPERATIONAL FLAGS. This is the visible surface of the v6 operational watch.
+
+This is M23 Slice B, the REPORT-LINE half. The read-only views it reads (`api.spend_anomalies`
+and `api.operational_flags`) ALREADY EXIST ON MAIN (shipped separately, PR #111). This slice
+ONLY renders rows + wires the fetch. It applies NO consequence, touches NO auth path, adds NO
+DB migration — a PURE FORMATTER change plus graceful fetches. It is fully SUBSTRATE-FREE to
+validate (a vitest unit test, no database).
+
+NOTE — this brief is SINGLE-USE: the run ships its task to `main`, so a re-run needs a fresh
+brief whose work isn't already on main.
+
+WHAT EXISTS TODAY (read before coding; do NOT change any of it):
+- bin/ainarres.mjs exports the PURE `formatReport({ board, timeline, trackRecord, governance,
+  auditFlags, governanceActions }, { lane })` and `reportJson(...)` with the same signature.
+  formatReport already renders a "governance (v5 …):" section (banned / trending / MERGE QUEUE
+  HALTED / open audit flags / ⚑ RECOMMEND PERMANENT BAN / governance actions), pure + total.
+  The `report` command fetches each view and degrades to [] on error. `fmtTokens(n)` is the
+  model pure helper (null → "unknown"; 1234 → "1.2k"; 1_200_000 → "1.2M"). Pure-formatter
+  tests live in test/status-format.test.ts.
+- `board` rows (already the first formatReport arg, already fetched by `report`) carry
+  `task_id`, `stage`, `claimed_by` (nullable), and `abandoned` (boolean). A row with
+  `abandoned === true` is a stalled/stranded claim — the HEALTH signal (no new view needed;
+  the health watch is a lens over state that already ships, design D4).
+- `api.spend_anomalies` — read-only, oversight-scoped. One row per anomaly. Columns:
+  `family`, `capability`, `anomaly` ('overspending' | 'no_delivery_spend'),
+  `tokens_per_delivery` (numeric, NULL for no_delivery_spend), `peer_median` (numeric, NULL
+  for no_delivery_spend), `peer_count` (int, NULL for no_delivery_spend),
+  `multiple_over_median` (numeric, NULL for no_delivery_spend), `overspend_multiple` (numeric),
+  `delivered` (int), `usage_events` (int).
+- `api.operational_flags` — read-only, oversight-scoped, newest-first. Columns: `family` (the
+  FLAGGED family), `capability`, `kind` ('spinning' | 'overspending' | 'health' | 'integrity'),
+  `detail` (text), `severity` (text), `actor_sub`, `created_at`.
+
+THE CONSEQUENCE LINE (design D5 — render it, decide nothing): the operational facet NEVER
+auto-bans. Present each item with a trailing tag: an OVERSPENDING signal is a COST signal, not
+competence → tag "(cost)"; everything else (spinning, burned, health, integrity) → tag
+"(review)". Overspending must NEVER read as a ban recommendation. This tag is the whole of the
+D5 presentation, and it lives HERE in the pure formatter.
+
+THE FEATURE — ONE TASK (no DB migration; the views are already on main):
+
+1. Add a small PURE module-scope helper near `fmtTokens`:
+       function opTag(kind) { return kind === "overspending" ? "cost" : "review"; }
+
+2. Extend the PURE `formatReport` first argument with two new fields, `spendAnomalies = []`
+   and `operationalFlags = []` (EXACTLY as `governance` / `auditFlags` were added). AFTER the
+   entire existing governance section (i.e. as the LAST section, after the governance-actions
+   trail), append an OPERATIONAL block. Keep `formatReport` pure and total (never throw on
+   empty/partial input).
+
+   Always print the section header line:
+       "operational (v6 — health & spend watch):"
+
+   Compute the three groups, then:
+   - HEALTH — `board` rows with `abandoned === true`, sorted by `task_id` ascending. One line
+     each:
+       "  - health: <task_id> stalled in <stage>, held by <family> (review)"
+     where <family> = row.claimed_by ?? "—".
+   - SPEND — `spendAnomalies` rows, sorted by family then capability. One line each, by anomaly:
+       overspending →
+       "  - <family> / <capability>: overspending — <fmtTokens(tokens_per_delivery)>/delivery, <multiple_over_median>× the peer median (cost)"
+       no_delivery_spend →
+       "  - <family> / <capability>: burned — <usage_events> usage event(s), 0 delivered (review)"
+   - FLAGS — `operationalFlags` rows, newest-first as given, capped at the 10 most recent. One
+     line each:
+       "  - <family> / <capability>: <kind> — <detail> (<opTag(kind)>)"
+
+   Print the groups in that order (health, then spend, then flags). If ALL THREE groups are
+   empty, print exactly one line instead:
+       "  (all clear — no health, spend, or operational-flag anomalies)"
+
+3. Extend the PURE `reportJson` the same way: add `spendAnomalies = []` and
+   `operationalFlags = []` to its first argument, and include in the returned object a new
+   `operational` field:
+       operational: {
+         health: <board rows with abandoned===true, mapped to { task_id, stage, family: claimed_by ?? null }, sorted by task_id>,
+         spend: spendAnomalies,
+         flags: operationalFlags.slice(0, 10),
+       }
+   Leave every existing returned field unchanged.
+
+4. Wire the `report` command (bin/ainarres.mjs) to also fetch `api.spend_anomalies` and
+   `api.operational_flags` (unfiltered, like family_track_record / governance_status /
+   audit_flags) and pass them in as `spendAnomalies` / `operationalFlags` to BOTH `formatReport`
+   and `reportJson`. Degrade gracefully to [] if a view is absent or the request errors — a
+   substrate without the views must still produce a full report. (Health needs no fetch — it is
+   derived from the `board` already fetched.)
+
+ACCEPTANCE — add assertions to test/status-format.test.ts (the PURE formatReport suite). They
+must FAIL on current main (no operational block) and PASS after:
+- formatReport({}) prints "operational (v6 — health & spend watch):" and, with no anomalies,
+  "  (all clear — no health, spend, or operational-flag anomalies)"; it still renders every
+  existing section and does not throw.
+- Given board: [{ task_id: 't1', stage: 'implementing', claimed_by: 'fam-x', abandoned: true }],
+  formatReport prints "  - health: t1 stalled in implementing, held by fam-x (review)".
+- Given spendAnomalies: [{ family: 'c', capability: 'role:implementer', anomaly: 'overspending',
+  tokens_per_delivery: 5000, peer_median: 120, multiple_over_median: 41.67, overspend_multiple: 5,
+  delivered: 1, usage_events: 1 }], formatReport prints a line containing
+  "c / role:implementer: overspending", "41.67× the peer median", and ending "(cost)".
+- Given spendAnomalies: [{ family: 'd', capability: 'role:reviewer', anomaly: 'no_delivery_spend',
+  tokens_per_delivery: null, delivered: 0, usage_events: 2 }], formatReport prints a line
+  containing "d / role:reviewer: burned — 2 usage event(s), 0 delivered (review)".
+- Given operationalFlags: [{ family: 'e', capability: 'role:implementer', kind: 'spinning',
+  detail: 'looped on a hallucinated tool' }], formatReport prints
+  "  - e / role:implementer: spinning — looped on a hallucinated tool (review)"; and for
+  kind:'overspending' the same shape ends "(cost)".
+- reportJson({ board: [{ task_id: 't1', stage: 'implementing', claimed_by: 'fam-x', abandoned: true }],
+  spendAnomalies: [/* one row */], operationalFlags: [/* one row */] }).operational has
+  health.length === 1 (with { task_id, stage, family }), spend.length === 1, flags.length === 1.
+
+VALIDATE (substrate-free — the ONLY validate; needs NO database, NO docker, NO make, NO psql.
+Run it verbatim; it must fail on main and pass after your change):
+    npx vitest run test/status-format.test.ts
+
+CONSTRAINTS:
+- No DB migration. No new view. Do NOT modify api.spend_anomalies / api.operational_flags or
+  any Slice A/B core, and do NOT touch the existing governance / track-record sections.
+- Keep `formatReport` and `reportJson` pure and total. Do not make them fetch anything — the
+  `report` command does the fetch and passes rows in (mirror the `governance` / `auditFlags`
+  wiring precisely).
+- The consequence PRESENTATION (cost vs review, via opTag) lives HERE, in the pure formatter —
+  this slice only READS and DISPLAYS; it decides no ban. JavaScript only (bin/ainarres.mjs is
+  ESM); tests are vitest in test/status-format.test.ts.
