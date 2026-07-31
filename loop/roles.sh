@@ -11,7 +11,7 @@
 #   cursor-implementer         cursor-agent + composer-2.5  role:implementer  (fallback, higher quality; not frontier)
 #   fallback-implementer       opencode + nemotron-3-ultra  role:implementer  (fallback, free API)
 #   designer                   claude-code + opus           role:designer     (one-shot decomposition)
-#   frontier                   grok + grok-build            reviewer + the SINGLE integrator (+escalated impl)
+#   frontier                   grok + grok-4.5            reviewer + the SINGLE integrator (+escalated impl)
 #   frontier-claude-reviewer   claude-code + sonnet         role:reviewer     (M19 peer, never integrates)
 # The frontier ROLE is federated: grok and the claude reviewer run CONCURRENTLY each
 # round as peers (LOOP_FRONTIER_PEERS), neither privileged — only grok can integrate.
@@ -118,7 +118,7 @@ role_family() {
     designer)                 echo "claude-code+opus" ;;           # M19: opus for design judgment
     frontier-claude-reviewer) echo "claude-code+sonnet" ;;         # M19: sonnet for review (distinct family)
     oversight)                echo "loop+driver" ;;
-    *)                        echo "grok+grok-build" ;;            # frontier (reviewer + the single integrator)
+    *)                        echo "grok+grok-4.5" ;;            # frontier (reviewer + the single integrator)
   esac
 }
 

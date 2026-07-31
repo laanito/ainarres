@@ -279,7 +279,7 @@ on conflict (project_id, key) do nothing;
 --   claude-code+opus (frontier, Claude Code) → designer + reviewer. NOT integrator:
 --     Claude Code is under the company merge-deny and cannot perform the merge.
 --   opencode+qwen3.6 (local worker) → implementer.
---   grok+grok-build (xAI harness, M11) → integrator (holds capability:integrate;
+--   grok+grok-4.5 (xAI harness, M11) → integrator (holds capability:integrate;
 --     see the M11 block below).
 insert into app.family_features (family_id, feature_id)
 select f.id, ft.id
@@ -302,14 +302,14 @@ on conflict (family_id, feature_id) do nothing;
 -- deny-gated merge — that would launder the denial). So capability:integrate lives
 -- with the grok family, the only runtime that can actually merge.
 insert into app.agent_families (key, description) values
-  ('grok+grok-build', 'grok harness, grok-build model — push-trusted independent integrator')
+  ('grok+grok-4.5', 'grok harness, grok-4.5 model — push-trusted independent integrator')
 on conflict (key) do nothing;
 
 insert into app.family_features (family_id, feature_id)
 select f.id, ft.id
 from app.agent_families f
 join app.features ft on ft.name = any (array['lane:dev', 'role:integrator', 'capability:integrate'])
-where f.key = 'grok+grok-build'
+where f.key = 'grok+grok-4.5'
 on conflict (family_id, feature_id) do nothing;
 
 -- ── M19: the claude frontier review peer (federation, ADR 0021 · design/federation.md) ──
@@ -429,7 +429,7 @@ on conflict (family_id, feature_id) do nothing;
 
 -- ── M12: capability escalation (ADR 0019, ordered tiers) ─────────────────────
 -- tier:2 is the frontier rung (base implementer work needs no tier feature). The
--- frontier implementer / escalation target is grok+grok-build: it already integrates;
+-- frontier implementer / escalation target is grok+grok-4.5: it already integrates;
 -- now it also claims escalated `implementing` tasks (role:implementer + tier:2). The
 -- cheap implementers (qwen3.6, big-pickle, nemotron-*) hold no tier:2, so a task
 -- escalated to require tier:2 routes to grok. Implementing tasks escalate after the
@@ -445,7 +445,7 @@ insert into app.family_features (family_id, feature_id)
 select f.id, ft.id
 from app.agent_families f
 join app.features ft on ft.name = any (array['role:implementer', 'tier:2'])
-where f.key = 'grok+grok-build'
+where f.key = 'grok+grok-4.5'
 on conflict (family_id, feature_id) do nothing;
 
 update app.stages set escalate_after = 2
