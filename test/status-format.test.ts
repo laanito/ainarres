@@ -708,6 +708,59 @@ describe("formatReport", () => {
     expect(opSection).not.toContain("BAN");
     expect(opSection).not.toContain("ban");
   });
+
+  // ── M24 Slice B — intake watch (open briefs) ──────────────────────────────
+
+  test("intake block: empty briefs print the header + (no briefs), every existing section still renders, no throw", () => {
+    const out = formatReport({});
+    expect(out).toContain("intake (v6 — open briefs):");
+    expect(out).toContain("  (no briefs)");
+    // Existing sections still render.
+    expect(out).toContain("shipped (");
+    expect(out).toContain("family track record");
+    expect(out).toContain("governance (v5");
+    expect(out).toContain("operational (v6 — health & spend watch):");
+    expect(() => formatReport({})).not.toThrow();
+  });
+
+  test("intake block renders IMMEDIATELY BEFORE the operational block (operational stays last)", () => {
+    const out = formatReport({});
+    const intakeIdx = out.indexOf("intake (v6 — open briefs):");
+    const opIdx = out.indexOf("operational (v6 — health & spend watch):");
+    expect(intakeIdx).toBeGreaterThan(-1);
+    expect(opIdx).toBeGreaterThan(intakeIdx);
+    // Operational is still the last section.
+    const opSection = out.slice(opIdx);
+    expect(opSection).toContain("operational (v6 — health & spend watch):");
+    expect(opSection.trimEnd().endsWith("(all clear — no health, spend, or operational-flag anomalies)")).toBe(true);
+  });
+
+  test("intake block: summary counts by stage, lists open briefs (stage !== accepted), never the accepted row", () => {
+    const openBriefs = [
+      { task_id: "i3", stage: "proposed_brief" },
+      { task_id: "i2", stage: "briefed" },
+      { task_id: "i1", stage: "accepted" },
+    ];
+    const out = formatReport({ openBriefs });
+    expect(out).toContain("intake (v6 — open briefs):");
+    expect(out).toContain("  1 proposed · 1 briefed · 1 accepted");
+    expect(out).toContain("  - i3 — proposed_brief");
+    expect(out).toContain("  - i2 — briefed");
+    expect(out).not.toContain("  - i1 —");
+  });
+
+  test("intake block: open briefs listed in the GIVEN order, capped at the 10 most recent", () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      task_id: `i${i}`, stage: i % 2 === 0 ? "proposed_brief" : "briefed",
+    }));
+    const out = formatReport({ openBriefs: many });
+    const lines = out.split("\n").filter(l => /^  - i\d+ — /.test(l));
+    expect(lines.length).toBe(10);
+    expect(lines[0]).toBe("  - i0 — proposed_brief");
+    expect(lines[9]).toBe("  - i9 — briefed");
+    expect(lines.join("\n")).not.toContain("i10");
+    expect(lines.join("\n")).not.toContain("i11");
+  });
 });
 
 describe("fmtTokens", () => {
@@ -763,6 +816,7 @@ describe("reportJson", () => {
       governance: [],
       auditFlags: [],
       governanceActions: [],
+      intake: { proposed: 0, briefed: 0, accepted: 0, open: [] },
       operational: { health: [], spend: [], flags: [] },
     });
   });
@@ -788,6 +842,7 @@ describe("reportJson", () => {
       governance: [],
       auditFlags: [],
       governanceActions: [],
+      intake: { proposed: 0, briefed: 0, accepted: 0, open: [] },
       operational: { health: [], spend: [], flags: [] },
     });
   });
@@ -835,6 +890,34 @@ describe("reportJson", () => {
     expect(result.auditFlags).toBe(auditFlags);
     expect(result.governanceActions).toBe(governanceActions);
     expect(result.shipped).toEqual([{ task_id: "s1", pr: null, implemented: null, reviewed: null, integrated: null, crossFamilyReview: false }]);
-    expect(Object.keys(result)).toEqual(["lane", "shipped", "trackRecord", "governance", "auditFlags", "governanceActions", "operational"]);
+    expect(Object.keys(result)).toEqual(["lane", "shipped", "trackRecord", "governance", "auditFlags", "governanceActions", "intake", "operational"]);
+  });
+
+  // ── M24 Slice B — intake watch (open briefs) ──────────────────────────────
+
+  test("(7) intake field: counts by stage and open rows (stage !== accepted), UNCAPPED, excluding accepted", () => {
+    const openBriefs = [
+      { task_id: "i3", stage: "proposed_brief" },
+      { task_id: "i2", stage: "briefed" },
+      { task_id: "i1", stage: "accepted" },
+    ];
+    expect(reportJson({ openBriefs }).intake).toEqual({
+      proposed: 1,
+      briefed: 1,
+      accepted: 1,
+      open: [
+        { task_id: "i3", stage: "proposed_brief" },
+        { task_id: "i2", stage: "briefed" },
+      ],
+    });
+  });
+
+  test("(7) intake.open is UNCAPPED — more than 10 open briefs all appear, in the given order", () => {
+    const many = Array.from({ length: 15 }, (_, i) => ({ task_id: `i${i}`, stage: "proposed_brief" }));
+    const result = reportJson({ openBriefs: many });
+    expect(result.intake.open.length).toBe(15);
+    expect(result.intake.open[0]).toEqual({ task_id: "i0", stage: "proposed_brief" });
+    expect(result.intake.open[14]).toEqual({ task_id: "i14", stage: "proposed_brief" });
+    expect(result.intake.open.map(r => r.task_id)).toEqual(many.map(r => r.task_id));
   });
 });
