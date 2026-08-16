@@ -27,10 +27,11 @@ loop/
 | `nano-implementer` | `opencode + nemotron-3-nano` | implementer (tier-0; **DISABLED** — hallucinated tools) |
 | `cheap-implementer` | `opencode + big-pickle` (free API) | implementer (primary, ×3 pool) |
 | `qwen-implementer` | `opencode + qwen3-coder-next` (80B) | implementer (cheap serial, big-pickle par; **1 session — never pooled**) |
+| `muse-implementer` | `opencode + muse-glimmer` (30B local MLX) | implementer (cheap serial, local; **1 session — never pooled**) |
 | `cursor-implementer` | `cursor-agent + composer-2.5` | implementer (fallback, higher quality; not frontier) |
 | `fallback-implementer` | `opencode + nemotron-3-ultra` (free API) | implementer (fallback) |
 | `designer` | `claude-code + opus` | designer (one-shot decomposition) |
-| `frontier` | `grok + grok-4.5` | reviewer + the **single integrator** + **escalated** implementer (`tier:2`) |
+| `frontier` | `grok + grok-4.6` | reviewer + the **single integrator** + **escalated** implementer (`tier:2`) |
 | `frontier-claude-reviewer` | `claude-code + sonnet` | reviewer (M19 peer, **never** integrates) |
 
 The driver sweeps the tiers **in this order, in rounds** (`roles.sh::LOOP_TIERS`).
@@ -38,9 +39,10 @@ Because each cheap tier runs to "nothing claimable" *before* the next runs,
 big-pickle's ×3 pool takes the bulk of the `implementing` work; then the serial tiers
 in order: `qwen-implementer` (opencode + qwen3-coder-next, an 80B ~big-pickle-par cheap
 implementer, single serial sweep — its `:cloud` backend allows one session) takes the
-first serial crack, then the higher-quality `cursor-implementer` (cursor-agent +
-composer-2.5), and behind it `fallback-implementer` (nemotron-3-ultra; swap via
-`OPENCODE_FALLBACK_MODEL`) — each covers an earlier tier being down/depleted **and**
+first serial crack, then `muse-implementer` (opencode + muse-glimmer, a 30B local MLX
+model, single serial sweep — a local model loads one at a time), then the higher-quality
+`cursor-implementer` (cursor-agent + composer-2.5), and behind it `fallback-implementer`
+(nemotron-3-ultra; swap via `OPENCODE_FALLBACK_MODEL`) — each covers an earlier tier being down/depleted **and**
 retries a task it failed, before the task escalates. (`nano-implementer` is the disabled
 tier-0 pre-pass slot — `LOOP_PRE_TIERS=()`; see below.) The frontier only picks up what's left:
 review/integrate, and M12-escalated tasks the cheap tiers couldn't finish (`tier:2`).
