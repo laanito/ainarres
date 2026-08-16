@@ -335,7 +335,7 @@ function fmtHeal(secs) {
   return `${h}h ${m}m`;
 }
 
-export function formatReport({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [], spendAnomalies = [], operationalFlags = [] } = {}, { lane = null } = {}) {
+export function formatReport({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [], spendAnomalies = [], operationalFlags = [], openBriefs = [] } = {}, { lane = null } = {}) {
   const lines = [lane ? `end-of-run report — lane ${lane}` : "end-of-run report — all lanes"];
 
   // What shipped: tasks at a terminal stage.
@@ -498,6 +498,25 @@ export function formatReport({ board = [], timeline = [], trackRecord = [], gove
     }
   }
 
+  // M24 Slice B — intake watch (v6 — open briefs): rows from api.open_briefs
+  // (read-only, newest-first, one row per intake-lane task). Counts by stage and
+  // lists the OPEN briefs (stage !== 'accepted') in the given order, capped at the
+  // 10 most recent. Rendered IMMEDIATELY BEFORE the operational block, which stays
+  // the LAST section. Pure, null-guarded, never throws.
+  lines.push("intake (v6 — open briefs):");
+  const proposed = openBriefs.filter(r => r && r.stage === "proposed_brief").length;
+  const briefed = openBriefs.filter(r => r && r.stage === "briefed").length;
+  const accepted = openBriefs.filter(r => r && r.stage === "accepted").length;
+  if (openBriefs.length === 0) {
+    lines.push("  (no briefs)");
+  } else {
+    lines.push(`  ${proposed} proposed · ${briefed} briefed · ${accepted} accepted`);
+    const open = openBriefs.filter(r => r && r.stage !== "accepted").slice(0, 10);
+    for (const r of open) {
+      lines.push(`  - ${r.task_id} — ${r.stage}`);
+    }
+  }
+
   // M23 Slice B — operational watch (v6 — health & spend): stalled/stranded claims
   // derived from the board (no extra fetch), spend anomalies (api.spend_anomalies)
   // and operational flags (api.operational_flags). Always the LAST section, after
@@ -535,7 +554,7 @@ export function formatReport({ board = [], timeline = [], trackRecord = [], gove
 // Pure, TOTAL JSON shaper for the end-of-run report. Same two-arg signature as
 // formatReport: rows in (already fetched), plain object out (no I/O, no clock,
 // never throws). Mirrors the same structure report --json will emit.
-export function reportJson({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [], spendAnomalies = [], operationalFlags = [] } = {}, { lane = null } = {}) {
+export function reportJson({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [], spendAnomalies = [], operationalFlags = [], openBriefs = [] } = {}, { lane = null } = {}) {
   const shipped = board
     .filter((r) => r.is_terminal === true)
     .map((row) => {
@@ -558,6 +577,14 @@ export function reportJson({ board = [], timeline = [], trackRecord = [], govern
     governance,
     auditFlags,
     governanceActions,
+    // M24 Slice B — intake watch (v6 — open briefs): counts by stage and the OPEN
+    // briefs (stage !== 'accepted'), ALL of them, UNCAPPED, in the given order.
+    intake: {
+      proposed: openBriefs.filter(r => r && r.stage === "proposed_brief").length,
+      briefed: openBriefs.filter(r => r && r.stage === "briefed").length,
+      accepted: openBriefs.filter(r => r && r.stage === "accepted").length,
+      open: openBriefs.filter(r => r && r.stage !== "accepted"),
+    },
     // M23 Slice B — operational watch: health derived from the board (family is the
     // JSON null fallback here, NOT the em dash used in the text rendering), spend
     // passed through as given, flags capped at the 10 most recent.
@@ -949,7 +976,9 @@ const COMMANDS = {
     // M22: audit_flags and governance_actions are also unfiltered and degrade to [].
     // M23: spend_anomalies and operational_flags are unfiltered and degrade to [] —
     // a substrate without them still yields a full report.
-    const [b, t, tr, gov, af, ga, sa, of] = await Promise.all([
+    // M24: open_briefs is unfiltered and degrades to [] — a substrate without the
+    // intake view still yields a full report.
+    const [b, t, tr, gov, af, ga, sa, of, ob] = await Promise.all([
       restGet(`board?${boardQ}`, token),
       restGet(`timeline?${tlQ}`, token),
       restGet(`family_track_record?order=family.asc,capability.asc`, token),
@@ -958,6 +987,7 @@ const COMMANDS = {
       restGet(`governance_actions?order=created_at.desc`, token),
       restGet(`spend_anomalies?order=family.asc,capability.asc`, token),
       restGet(`operational_flags?order=created_at.desc`, token),
+      restGet(`open_briefs?order=created_at.desc`, token),
     ]);
     for (const r of [b, t]) {
       if (!r.httpOk) { emit(r.body ?? { ok: false, code: "http_error", status: r.status }, false); return; }
@@ -968,10 +998,11 @@ const COMMANDS = {
     const governanceActions = ga.httpOk && Array.isArray(ga.body) ? ga.body : [];
     const spendAnomalies = sa.httpOk && Array.isArray(sa.body) ? sa.body : [];
     const operationalFlags = of.httpOk && Array.isArray(of.body) ? of.body : [];
+    const openBriefs = ob.httpOk && Array.isArray(ob.body) ? ob.body : [];
     if (values.json) {
-      process.stdout.write(`${JSON.stringify(reportJson({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions, spendAnomalies, operationalFlags }, { lane }), null, 2)}\n`);
+      process.stdout.write(`${JSON.stringify(reportJson({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions, spendAnomalies, operationalFlags, openBriefs }, { lane }), null, 2)}\n`);
     } else {
-      process.stdout.write(`${formatReport({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions, spendAnomalies, operationalFlags }, { lane })}\n`);
+      process.stdout.write(`${formatReport({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions, spendAnomalies, operationalFlags, openBriefs }, { lane })}\n`);
     }
   },
 
