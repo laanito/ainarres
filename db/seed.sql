@@ -279,7 +279,7 @@ on conflict (project_id, key) do nothing;
 --   claude-code+opus (frontier, Claude Code) → designer + reviewer. NOT integrator:
 --     Claude Code is under the company merge-deny and cannot perform the merge.
 --   opencode+qwen3.6 (local worker) → implementer.
---   grok+grok-4.5 (xAI harness, M11) → integrator (holds capability:integrate;
+--   grok+grok-4.6 (xAI harness, M11) → integrator (holds capability:integrate;
 --     see the M11 block below).
 insert into app.family_features (family_id, feature_id)
 select f.id, ft.id
@@ -302,14 +302,14 @@ on conflict (family_id, feature_id) do nothing;
 -- deny-gated merge — that would launder the denial). So capability:integrate lives
 -- with the grok family, the only runtime that can actually merge.
 insert into app.agent_families (key, description) values
-  ('grok+grok-4.5', 'grok harness, grok-4.5 model — push-trusted independent integrator')
+  ('grok+grok-4.6', 'grok harness, grok-4.6 model — push-trusted independent integrator')
 on conflict (key) do nothing;
 
 insert into app.family_features (family_id, feature_id)
 select f.id, ft.id
 from app.agent_families f
 join app.features ft on ft.name = any (array['lane:dev', 'role:integrator', 'capability:integrate'])
-where f.key = 'grok+grok-4.5'
+where f.key = 'grok+grok-4.6'
 on conflict (family_id, feature_id) do nothing;
 
 -- ── M19: the claude frontier review peer (federation, ADR 0021 · design/federation.md) ──
@@ -407,6 +407,26 @@ join app.features ft on ft.name = any (array['lane:dev', 'role:implementer'])
 where f.key = 'opencode+qwen3-coder-next'
 on conflict (family_id, feature_id) do nothing;
 
+-- ── Roster: opencode + muse-glimmer (cheap serial implementer, local MLX) ────
+-- A 30B local MLX model, reached through opencode's ollama provider:
+-- `-m ollama/muse-glimmer:30b-mlx`. Holds role:implementer on lane:dev, NOT
+-- capability:frontier/tier:2. The loop runs it as a serial sweep AFTER qwen3-coder-next
+-- (loop/roles.sh::LOOP_SERIAL_TIERS) — a single serial sweep, since a local MLX model
+-- loads one at a time (one concurrent session), so it can't join big-pickle's ×N pool.
+-- Reuses the opencode implementer wrapper (no new harness). Vetted against opencode's
+-- actual toolset (read/edit/write, no hallucinated tools) before seating. A family must
+-- be registered here to be claim-eligible ("unknown family" ⇒ not_eligible, ADR 0007).
+insert into app.agent_families (key, description) values
+  ('opencode+muse-glimmer', 'opencode/ollama, muse-glimmer:30b-mlx (30B local MLX) — cheap serial implementer (1 concurrent session)')
+on conflict (key) do nothing;
+
+insert into app.family_features (family_id, feature_id)
+select f.id, ft.id
+from app.agent_families f
+join app.features ft on ft.name = any (array['lane:dev', 'role:implementer'])
+where f.key = 'opencode+muse-glimmer'
+on conflict (family_id, feature_id) do nothing;
+
 -- ── Roster: cursor-agent + composer-2.5 (fallback implementer) ───────────────
 -- A higher-quality implementer than the cheap opencode tiers, below the grok frontier:
 -- Cursor's headless coding agent (`cursor-agent -p … --model composer-2.5 --force`).
@@ -429,7 +449,7 @@ on conflict (family_id, feature_id) do nothing;
 
 -- ── M12: capability escalation (ADR 0019, ordered tiers) ─────────────────────
 -- tier:2 is the frontier rung (base implementer work needs no tier feature). The
--- frontier implementer / escalation target is grok+grok-4.5: it already integrates;
+-- frontier implementer / escalation target is grok+grok-4.6: it already integrates;
 -- now it also claims escalated `implementing` tasks (role:implementer + tier:2). The
 -- cheap implementers (qwen3.6, big-pickle, nemotron-*) hold no tier:2, so a task
 -- escalated to require tier:2 routes to grok. Implementing tasks escalate after the
@@ -445,7 +465,7 @@ insert into app.family_features (family_id, feature_id)
 select f.id, ft.id
 from app.agent_families f
 join app.features ft on ft.name = any (array['role:implementer', 'tier:2'])
-where f.key = 'grok+grok-4.5'
+where f.key = 'grok+grok-4.6'
 on conflict (family_id, feature_id) do nothing;
 
 update app.stages set escalate_after = 2

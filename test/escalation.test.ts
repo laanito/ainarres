@@ -13,7 +13,7 @@ import { mintToken } from "./helpers/mint";
 // impl (initial) → done. The tier:2 feature is seeded by db/seed.sql.
 
 const CHEAP = "opencode+qwen3.6"; // exists; cheap implementer family (no tier:2)
-const FRONTIER = "grok+grok-4.5"; // exists; holds tier:2 in the real seed
+const FRONTIER = "grok+grok-4.6"; // exists; holds tier:2 in the real seed
 
 const FIXTURE = `
   insert into app.features (kind, key) values ('lane','m12a'), ('lane','m12b'), ('role','implementer')

@@ -8,10 +8,11 @@
 #   nano-implementer           opencode + nemotron-3-nano   role:implementer  (tier-0; DISABLED — hallucinated tools, LOOP_PRE_TIERS=())
 #   cheap-implementer          opencode + big-pickle        role:implementer  (primary pool, free API)
 #   qwen-implementer           opencode + qwen3-coder-next  role:implementer  (cheap serial, big-pickle par; 1 session — NEVER pooled)
+#   muse-implementer           opencode + muse-glimmer      role:implementer  (cheap serial, local MLX 30B; 1 session — NEVER pooled)
 #   cursor-implementer         cursor-agent + composer-2.5  role:implementer  (fallback, higher quality; not frontier)
 #   fallback-implementer       opencode + nemotron-3-ultra  role:implementer  (fallback, free API)
 #   designer                   claude-code + opus           role:designer     (one-shot decomposition)
-#   frontier                   grok + grok-4.5            reviewer + the SINGLE integrator (+escalated impl)
+#   frontier                   grok + grok-4.6            reviewer + the SINGLE integrator (+escalated impl)
 #   frontier-claude-reviewer   claude-code + sonnet         role:reviewer     (M19 peer, never integrates)
 # The frontier ROLE is federated: grok and the claude reviewer run CONCURRENTLY each
 # round as peers (LOOP_FRONTIER_PEERS), neither privileged — only grok can integrate.
@@ -45,7 +46,7 @@ RUN_DIR="${RUN_DIR:-$REPO/loop/run}"     # per-tier sweep logs (gitignored)
 # the escalation ceiling. (Adding a tier ahead means the LAST cheap tier now rarely runs
 # before escalate_after=2 fires — bump the dev implementing stage's escalate_after in the
 # loop seed if you want all three cheap tiers to attempt before grok.)
-LOOP_TIERS=(cheap-implementer qwen-implementer cursor-implementer fallback-implementer frontier)
+LOOP_TIERS=(cheap-implementer qwen-implementer muse-implementer cursor-implementer fallback-implementer frontier)
 
 # M18 split (ADR 0021): the primary cheap implementer is FANNED OUT into a concurrent
 # pool (LOOP_POOL_SIZE members per round — the swarm's throughput); the remaining tiers
@@ -58,7 +59,7 @@ LOOP_POOL_TIER="${LOOP_POOL_TIER:-cheap-implementer}"
 # serial crack — it's a single sweep because its :cloud backend allows only 1 concurrent
 # session, so it can't join the ×N pool. Then the higher-quality fallbacks: cursor-implementer
 # (cursor-agent + composer-2.5), backed by nemotron-3-ultra. All single serial sweeps.
-LOOP_SERIAL_TIERS=(qwen-implementer cursor-implementer fallback-implementer)
+LOOP_SERIAL_TIERS=(qwen-implementer muse-implementer cursor-implementer fallback-implementer)
 
 # Tier-0 pre-pass: tiers swept ONCE, serially, BEFORE the concurrent pool each round
 # (driver.sh). nano is the cheapest implementer and drains the easy work it can before
@@ -92,6 +93,7 @@ role_features() {
     nano-implementer)     echo "lane:dev,role:implementer" ;;  # tier-0 (disabled): same role, cheapest model
     cheap-implementer)    echo "lane:dev,role:implementer" ;;
     qwen-implementer)     echo "lane:dev,role:implementer" ;;  # cheap serial: same role, big-pickle-par model
+    muse-implementer)     echo "lane:dev,role:implementer" ;;  # cheap serial: same role, local MLX 30B model
     cursor-implementer)   echo "lane:dev,role:implementer" ;;  # fallback: same role, higher-quality harness (not frontier — no tier:2)
     fallback-implementer) echo "lane:dev,role:implementer" ;;  # same role, different (free-API) model
     frontier)
@@ -113,12 +115,13 @@ role_family() {
     nano-implementer)         echo "opencode+nemotron-3-nano" ;;   # tier-0 (disabled): cheapest implementer (1 concurrent session)
     cheap-implementer)        echo "opencode+big-pickle" ;;        # primary cheap implementer (free API)
     qwen-implementer)         echo "opencode+qwen3-coder-next" ;;  # cheap serial: 80B, big-pickle par (1 concurrent session)
+    muse-implementer)         echo "opencode+muse-glimmer" ;;      # cheap serial: 30B local MLX (1 concurrent session)
     cursor-implementer)       echo "cursor-agent+composer-2.5" ;;  # fallback: cursor-agent harness, composer-2.5 model
     fallback-implementer)     echo "opencode+nemotron-3-ultra" ;;  # fallback (free API, more capable)
     designer)                 echo "claude-code+opus" ;;           # M19: opus for design judgment
     frontier-claude-reviewer) echo "claude-code+sonnet" ;;         # M19: sonnet for review (distinct family)
     oversight)                echo "loop+driver" ;;
-    *)                        echo "grok+grok-4.5" ;;            # frontier (reviewer + the single integrator)
+    *)                        echo "grok+grok-4.6" ;;            # frontier (reviewer + the single integrator)
   esac
 }
 
@@ -161,6 +164,12 @@ harness_sweep() {
       # ⇒ a single serial sweep, never pooled.
       OPENCODE_MODEL="${OPENCODE_QWEN_MODEL:-ollama/qwen3-coder-next:cloud}" \
         eval "${OPENCODE_QWEN_CMD:-bash \"$REPO/loop/opencode-implementer.sh\"}" ;;
+    muse-implementer)
+      # cheap serial: muse-glimmer (30B local MLX) via opencode's ollama provider. Reuses
+      # the opencode implementer wrapper (like big-pickle/qwen), different model. A local
+      # MLX model loads one at a time (1 concurrent session) ⇒ a single serial sweep, never pooled.
+      OPENCODE_MODEL="${OPENCODE_MUSE_MODEL:-ollama/muse-glimmer:30b-mlx}" \
+        eval "${OPENCODE_MUSE_CMD:-bash \"$REPO/loop/opencode-implementer.sh\"}" ;;
     cursor-implementer)
       # fallback: cursor-agent + composer-2.5 (its own harness wrapper). Serial tier.
       CURSOR_MODEL="${CURSOR_IMPL_MODEL:-composer-2.5}" \
