@@ -1,0 +1,102 @@
+Surface the M24 INTAKER (v6 front bookend) in the END-OF-RUN REPORT: add an "intake" block
+that shows the open-briefs board — how many briefs are pending / briefed / accepted, and lists
+the still-open ones. This is the visible surface of the intake lane the intaker works.
+
+This is M24 Slice B, the REPORT-LINE half. The read-only view it reads (`api.open_briefs`)
+ALREADY EXISTS ON MAIN (shipped separately). This slice ONLY renders rows + wires the fetch. It
+applies NO consequence, touches NO auth path, adds NO DB migration — a PURE FORMATTER change
+plus one graceful fetch. It is fully SUBSTRATE-FREE to validate (a vitest unit test, no database).
+
+NOTE — this brief is SINGLE-USE: the run ships its task to `main`, so a re-run needs a fresh
+brief whose work isn't already on main.
+
+WHAT EXISTS TODAY (read before coding; do NOT change any of it):
+- bin/ainarres.mjs exports the PURE `formatReport({ board, timeline, trackRecord, governance,
+  auditFlags, governanceActions, spendAnomalies, operationalFlags }, { lane })` and
+  `reportJson(...)` with the SAME signature. Its LAST section today is the "operational (v6 —
+  health & spend watch):" block; before it come the governance / track-record sections. The
+  `report` command fetches each view with `restGet(...)` and degrades to [] on error (see the
+  `Promise.all([...])` in the `report` command — family_track_record / governance_status /
+  audit_flags / governance_actions / spend_anomalies / operational_flags are each fetched
+  UNFILTERED and each degrades to [] via `x.httpOk && Array.isArray(x.body) ? x.body : []`).
+  Pure-formatter tests live in test/status-format.test.ts.
+- `api.open_briefs` — read-only, oversight-scoped, newest-first (created_at desc). One row per
+  intake-lane task. Columns: `task_id`, `lane` (always 'intake'), `stage`
+  ('proposed_brief' | 'briefed' | 'accepted'), `is_terminal` (bool; true only for accepted),
+  `claimed_by_family` (nullable), `age_in_stage`, `subject`, `created_at`, `updated_at`.
+  proposed_brief = a brief the intaker is still working; briefed = ready, awaiting a designer;
+  accepted = a designer has taken it for decomposition (terminal on the intake lane).
+
+THE FEATURE — ONE TASK (no DB migration; the view is already on main):
+
+1. Extend the PURE `formatReport` first argument with a new field `openBriefs = []` (EXACTLY as
+   `spendAnomalies` / `operationalFlags` were added). Render a new INTAKE block IMMEDIATELY
+   BEFORE the existing operational block — so section order becomes: … governance → INTAKE →
+   operational (operational STAYS last). Keep `formatReport` pure and total (never throw on
+   empty/partial input).
+
+   Always print the section header line:
+       "intake (v6 — open briefs):"
+
+   Compute three counts from `openBriefs` rows by stage:
+       proposed = rows with stage === 'proposed_brief'
+       briefed  = rows with stage === 'briefed'
+       accepted = rows with stage === 'accepted'
+   Then:
+   - If `openBriefs` is empty, print exactly one line:
+       "  (no briefs)"
+   - Otherwise print a summary line:
+       "  <proposed> proposed · <briefed> briefed · <accepted> accepted"
+     then list the OPEN briefs — rows with stage !== 'accepted', in the given order (the view is
+     already newest-first), capped at the 10 most recent — one line each:
+       "  - <task_id> — <stage>"
+     (If there are open briefs beyond the cap, that is fine — just show the first 10; no extra
+     line needed.)
+
+2. Extend the PURE `reportJson` the same way: add `openBriefs = []` to its first argument, and
+   include in the returned object a new `intake` field:
+       intake: {
+         proposed: <count of stage==='proposed_brief'>,
+         briefed:  <count of stage==='briefed'>,
+         accepted: <count of stage==='accepted'>,
+         open:     <openBriefs rows with stage !== 'accepted' (all of them, uncapped)>,
+       }
+   Leave every existing returned field unchanged.
+
+3. Wire the `report` command (bin/ainarres.mjs) to also fetch `api.open_briefs` (UNFILTERED —
+   the view is already scoped to the intake lane; do NOT apply the report's dev-lane filter to
+   it) with `restGet("open_briefs?order=created_at.desc", token)`, and pass the rows in as
+   `openBriefs` to BOTH `formatReport` and `reportJson`. Degrade gracefully to [] if the view is
+   absent or the request errors (mirror the spend_anomalies / operational_flags wiring exactly)
+   — a substrate without the view must still produce a full report.
+
+ACCEPTANCE — add assertions to test/status-format.test.ts (the PURE formatReport suite). They
+must FAIL on current main (no intake block) and PASS after:
+- formatReport({}) prints "intake (v6 — open briefs):" and, with no briefs, "  (no briefs)"; it
+  still renders every existing section (including "operational (v6 — health & spend watch):")
+  and does not throw.
+- The intake block appears BEFORE the operational block: in formatReport({})'s output, the index
+  of "intake (v6 — open briefs):" is less than the index of "operational (v6 — health & spend
+  watch):".
+- Given openBriefs: [
+    { task_id: 'i3', stage: 'proposed_brief' },
+    { task_id: 'i2', stage: 'briefed' },
+    { task_id: 'i1', stage: 'accepted' },
+  ], formatReport prints the summary line "  1 proposed · 1 briefed · 1 accepted", prints
+  "  - i3 — proposed_brief" and "  - i2 — briefed", and does NOT list the accepted brief i1.
+- reportJson({ openBriefs: [ /* the three rows above */ ] }).intake equals
+  { proposed: 1, briefed: 1, accepted: 1, open: [<the i3 row>, <the i2 row>] } (open has
+  length 2, excludes the accepted row).
+
+VALIDATE (substrate-free — the ONLY validate; needs NO database, NO docker, NO make, NO psql.
+Run it verbatim; it must fail on main and pass after your change):
+    npx vitest run test/status-format.test.ts
+
+CONSTRAINTS:
+- No DB migration. No new view. Do NOT modify api.open_briefs or any Slice A/B core, and do NOT
+  touch the existing governance / track-record / operational sections (only INSERT the intake
+  block before operational).
+- Keep `formatReport` and `reportJson` pure and total. Do not make them fetch anything — the
+  `report` command does the fetch and passes rows in (mirror the operational-block wiring
+  precisely). JavaScript only (bin/ainarres.mjs is ESM); tests are vitest in
+  test/status-format.test.ts.
