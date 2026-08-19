@@ -447,6 +447,28 @@ join app.features ft on ft.name = any (array['lane:dev', 'role:implementer'])
 where f.key = 'cursor-agent+composer-2.5'
 on conflict (family_id, feature_id) do nothing;
 
+-- ── v7 / M26: the human/external intake identity (the local channel's caller) ─
+-- The intake channel (bin/intake-server.mjs, ADR 0025) authenticates an external
+-- Customer with a pre-shared key and then acts AS this identity to open a proposed_brief
+-- in the intake lane. It is a HUMAN identity, DISTINCT from the worker (agent) families
+-- above: it holds ONLY lane:intake + role:intaker — the M24 two-tier create-gate lets it
+-- create the request-root, and NOTHING else (no lane:dev, so it cannot create dev work;
+-- no capability:integrate, so it can never merge — the substrate's D4 gate is the inner
+-- wall behind the channel's PSK, defence in depth). The features it is granted here match
+-- what M24 seeded (lane:intake, role:intaker). A family must be registered to be usable
+-- ("unknown family" ⇒ not_eligible, ADR 0007) — that is why the channel's identity lives
+-- here in the roster, even though it is a human, not a harness.
+insert into app.agent_families (key, description) values
+  ('human+intaker', 'the local intake channel''s caller (ADR 0025) — a human/external identity that opens proposed briefs via role:intaker; NOT a worker (no lane:dev, no capability:integrate)')
+on conflict (key) do nothing;
+
+insert into app.family_features (family_id, feature_id)
+select f.id, ft.id
+from app.agent_families f
+join app.features ft on ft.name = any (array['lane:intake', 'role:intaker'])
+where f.key = 'human+intaker'
+on conflict (family_id, feature_id) do nothing;
+
 -- ── M12: capability escalation (ADR 0019, ordered tiers) ─────────────────────
 -- tier:2 is the frontier rung (base implementer work needs no tier feature). The
 -- frontier implementer / escalation target is grok+grok-4.6: it already integrates;

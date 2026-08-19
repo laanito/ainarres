@@ -9,7 +9,7 @@ COMPOSE_LOOP := docker compose -p ainarres-loop --env-file loop.env
 
 .PHONY: up down reset migrate seed test verify-down logs ps \
         loop-up loop-down loop-seed loop-reset loop-ps loop-logs verify-isolation \
-        service service-stop service-status service-selftest
+        service service-stop service-status service-selftest intake-serve
 
 ## Bring the stack up (db → migrate → postgrest) and wait for db health.
 up:
@@ -137,3 +137,12 @@ service-status:
 ## restart, graceful stop. This is M25's done-test (design/service.md).
 service-selftest: loop-reset
 	@LOOP_MODE=mock bash loop/service-selftest.sh
+
+## The local intake CHANNEL (v7 M26, ADR 0025): a loopback-bound HTTP endpoint an
+## external Customer POSTs a request to (X-Intake-Key: <psk>) → a proposed_brief in the
+## intake lane, which the standing service then drains. Targets the LOOP substrate.
+## Requires INTAKE_PSK; optional INTAKE_PORT (default 3020). First external ingress —
+## local, single-owner, light (ADR 0025). Usage: INTAKE_PSK=... make intake-serve
+intake-serve:
+	@test -n "$(INTAKE_PSK)" || { echo "usage: INTAKE_PSK=<key> make intake-serve  (a pre-shared key is required — no key, no auth)"; exit 2; }
+	@bash -c 'set -a; source loop.env; set +a; INTAKE_PSK="$(INTAKE_PSK)" INTAKE_PORT="$${INTAKE_PORT:-3020}" node bin/intake-server.mjs'
