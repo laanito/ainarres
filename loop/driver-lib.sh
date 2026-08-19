@@ -181,6 +181,49 @@ run_concurrent() {
   POOL_PIDS=()
 }
 
+# ── Consume governance (design/service.md D6) — skip a temp-banned family ─────
+# The standing service reads the SAME revocation the substrate already enforces
+# (api.governance_status, M21/M22) and declines to SPAWN a family that is banned for a
+# capability its role needs — pure waste-avoidance (a spawned-anyway banned family would
+# just fail to claim). This is CONSUMING governance, never ROUTING: it only says "don't
+# launch this useless worker", never "send this task to that worker".
+#
+# Best-effort + resilient (the M18/M19 measured-not-enforced rule): an unreadable
+# governance_status degrades to "spawn anyway" so a governance outage never stalls the
+# loop. Gated by LOOP_CONSUME_GOVERNANCE (the SERVICE sets =1; the batch driver leaves it
+# unset → refresh is skipped, GOV_BANNED stays empty → skip_if_banned always proceeds →
+# the batch driver's behaviour is byte-for-byte unchanged).
+GOV_BANNED=""     # newline-separated "family|capability" pairs currently banned=true
+
+# Refresh GOV_BANNED from api.governance_status (oversight token). Best-effort: any
+# error / non-array / empty leaves GOV_BANNED empty (→ nobody skipped). Called once per
+# round so a ban that heals (or appears) between rounds is picked up next round.
+refresh_governance() {
+  GOV_BANNED="$(ai governance-status --token "$OVERSIGHT_TOKEN" 2>/dev/null \
+    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{r=[]};if(!Array.isArray(r))r=[];process.stdout.write(r.filter(x=>x&&x.banned===true).map(x=>x.family+"|"+x.capability).join("\n"))})' || true)"
+  [ -n "$GOV_BANNED" ] && echo "  ↳ governance: banned $(printf '%s' "$GOV_BANNED" | tr '\n' ',' | sed 's/,$//')"
+  return 0
+}
+
+# skip_if_banned <poller>: return 0 (SKIP) iff the poller's FAMILY is banned for a
+# capability its ROLE uses (role_family + role_features vs the cached GOV_BANNED);
+# return 1 (PROCEED) otherwise. Matches on the tier's actual role features, so a family
+# banned for one capability (e.g. grok for capability:integrate) is only skipped for the
+# tier that needs THAT capability, not over-skipped.
+skip_if_banned() {
+  local poller="$1" fam cap
+  [ -n "$GOV_BANNED" ] || return 1        # no bans (or read failed/unused) → proceed
+  fam="$(role_family "$poller")"
+  local IFS=','
+  for cap in $(role_features "$poller"); do
+    [ -n "$cap" ] || continue
+    if printf '%s\n' "$GOV_BANNED" | grep -qxF "$fam|$cap"; then
+      return 0                            # banned for a capability this poller needs → skip
+    fi
+  done
+  return 1
+}
+
 # ── run_activation: ONE full drain attempt (the round loop) ───────────────────
 # The v3–v6 round loop, lifted verbatim: fan the primary cheap implementer into a pool
 # (throughput), then the serial tiers once each, then the frontier peers concurrently;
@@ -208,6 +251,10 @@ run_activation() {
     [ "${DRAINING:-0}" = 1 ] && return 3
     round=$((round + 1))
     before="$(board_sig)"
+    # Consume governance (D6): refresh the banned set once per round (service only —
+    # LOOP_CONSUME_GOVERNANCE; the batch driver leaves GOV_BANNED empty so skip_if_banned
+    # always proceeds and behaviour is unchanged).
+    [ "${LOOP_CONSUME_GOVERNANCE:-0}" = 1 ] && refresh_governance
     # Design pass (LOOP_DESIGN_TIERS — empty for the BATCH driver, which decomposes the
     # brief ONCE upfront; ('designer') for the standing SERVICE, where decomposition is
     # CONTINUOUS — proposed dev tasks and, later, accepted intake briefs keep arriving and
@@ -215,6 +262,7 @@ run_activation() {
     # sweep with no brief just advances/decomposes whatever proposed work is on the board.
     for tier in "${LOOP_DESIGN_TIERS[@]:-}"; do
       [ -n "$tier" ] || continue
+      if skip_if_banned "$tier"; then echo "→ round $round: SKIP design tier '$tier' — family banned (consuming governance)"; continue; fi
       echo "→ round $round: design tier '$tier' sweeping…"
       run_sweep "$tier" || echo "  (design tier '$tier' sweep exited non-zero — continuing)"
     done
@@ -223,17 +271,32 @@ run_activation() {
     # here, never in the ×LOOP_POOL_SIZE pool).
     for tier in "${LOOP_PRE_TIERS[@]:-}"; do
       [ -n "$tier" ] || continue
+      if skip_if_banned "$tier"; then echo "→ round $round: SKIP pre-pool tier '$tier' — family banned (consuming governance)"; continue; fi
       echo "→ round $round: pre-pool tier '$tier' sweeping…"
       run_sweep "$tier" || echo "  (pre-pool tier '$tier' sweep exited non-zero — continuing)"
     done
-    echo "→ round $round: ${LOOP_POOL_SIZE} concurrent '${LOOP_POOL_TIER}' implementers…"
-    run_pool "$LOOP_POOL_TIER" "$LOOP_POOL_SIZE"
+    if skip_if_banned "$LOOP_POOL_TIER"; then
+      echo "→ round $round: SKIP pool tier '$LOOP_POOL_TIER' — family banned (consuming governance)"
+    else
+      echo "→ round $round: ${LOOP_POOL_SIZE} concurrent '${LOOP_POOL_TIER}' implementers…"
+      run_pool "$LOOP_POOL_TIER" "$LOOP_POOL_SIZE"
+    fi
     for tier in "${LOOP_SERIAL_TIERS[@]}"; do
+      if skip_if_banned "$tier"; then echo "→ round $round: SKIP tier '$tier' — family banned (consuming governance)"; continue; fi
       echo "→ round $round: tier '$tier' sweeping…"
       run_sweep "$tier" || echo "  (tier '$tier' sweep exited non-zero — continuing)"
     done
-    echo "→ round $round: frontier peers concurrently: ${LOOP_FRONTIER_PEERS[*]}…"
-    run_concurrent "${LOOP_FRONTIER_PEERS[@]}"
+    # Frontier peers: filter out any banned peer, run the rest concurrently.
+    local peers=() p
+    for p in "${LOOP_FRONTIER_PEERS[@]}"; do
+      if skip_if_banned "$p"; then echo "→ round $round: SKIP frontier peer '$p' — family banned (consuming governance)"; else peers+=("$p"); fi
+    done
+    if [ "${#peers[@]}" -gt 0 ]; then
+      echo "→ round $round: frontier peers concurrently: ${peers[*]}…"
+      run_concurrent "${peers[@]}"
+    else
+      echo "→ round $round: all frontier peers banned — skipping frontier this round"
+    fi
     read -r active blocked <<<"$(counts)"
     after="$(board_sig)"
     echo "  round $round complete: ${active} active, ${blocked} blocked"

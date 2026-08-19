@@ -1,0 +1,97 @@
+Give the v7 STANDING SERVICE a human-readable liveness readout: a PURE formatter
+`formatServiceStatus(status)` that renders the service's local status file, plus an
+`ainarres service-status` command that reads the file and prints it. Today `make
+service-status` just cats raw JSON; this makes it a clean one-glance readout.
+
+This is M25 Slice B, the SWARM (report-line-style) half. It applies NO consequence, touches
+NO auth path, adds NO DB migration, reads NO database — a PURE FORMATTER plus a thin
+file-reading command. It is fully SUBSTRATE-FREE to validate (a vitest unit test, no docker,
+no make, no psql, no database).
+
+NOTE — this brief is SINGLE-USE: the run ships its task to `main`, so a re-run needs a fresh
+brief whose work isn't already on main.
+
+WHAT EXISTS TODAY (read before coding; do NOT change any of it):
+- The standing service (loop/service.sh, on main) writes a LOCAL status file each tick to
+  `loop/run/service.status` — a single line of JSON with EXACTLY these fields:
+      {
+        "pid":       <number>,        // the service process pid
+        "state":     <string>,        // one of: starting | idle | running | stalled | stopped
+        "activation":<number>,        // how many activations run since start (0 when never woken)
+        "round":     <number>,        // the current activation's round (0 when idle)
+        "active":    <number>,        // active tasks on the board at the last tick
+        "blocked":   <number>,        // blocked tasks at the last tick
+        "poll_secs": <number>,        // idle poll interval
+        "note":      <string>,        // a short human note (may be empty "")
+        "last_tick": <string>         // ISO-8601 UTC timestamp of the last tick
+      }
+  It is NOT substrate truth — it is the process's own liveness (design/service.md D4). The
+  file may be ABSENT (service never started / cleaned) — treat that as "not running".
+- bin/ainarres.mjs is ESM. It already exports PURE formatters (e.g. `formatReport`,
+  `formatStatus`) that build an array of lines and `return lines.join("\n")`, never throwing on
+  empty/partial input. Their unit tests live in test/status-format.test.ts (no database). The
+  `board` / `abandoned` / `governance-status` commands show the thin command shape; commands are
+  registered in the `COMMANDS` object and their flags in `OPTS`.
+- `make service-status` currently does: `cat loop/run/service.status` (raw JSON) or prints a
+  "not running" line if the file is absent.
+
+THE FEATURE — ONE TASK (no DB, no migration, no fetch):
+
+1. Add and EXPORT a PURE function `formatServiceStatus(status)` to bin/ainarres.mjs. `status` is
+   either the parsed status object (fields above) or `null`/undefined (no file). It returns a
+   multi-line string. Pure and TOTAL — never throws, even on null or missing fields (treat a
+   missing numeric field as 0, a missing string as ""). Build a `lines` array and join with "\n".
+
+   ALWAYS print the header line first:
+       "service (v7 — standing supervisor):"
+
+   - If `status` is null/undefined (or not an object), print exactly one more line and stop:
+       "  (not running — no status file)"
+   - Otherwise print, in THIS order:
+       "  state: <state>"
+       (ONLY when state === 'running') "  activation #<activation> · round <round>"
+       "  board: <active> active · <blocked> blocked"
+       "  poll every <poll_secs>s · pid <pid>"
+       "  last tick: <last_tick>"
+       (ONLY when note is a non-empty string) "  note: <note>"
+
+2. Add an `ainarres service-status` command to bin/ainarres.mjs (register in COMMANDS + OPTS).
+   It reads the status file with Node's fs (default path "loop/run/service.status", overridable
+   with a `--file <path>` option), parses the JSON, and prints `formatServiceStatus(parsed)`. If
+   the file is ABSENT or unparseable, call `formatServiceStatus(null)` (so it prints the "not
+   running" readout) — do NOT throw or exit non-zero for a missing file. This command needs NO
+   token and makes NO network/DB call. Give it OPTS: `{ file: { type: "string" } }`.
+
+3. Update the Makefile `service-status` target to call the command instead of `cat`:
+       service-status:
+       	@node bin/ainarres.mjs service-status
+   (Keep it a single recipe line; the command handles the missing-file case itself.)
+
+ACCEPTANCE — add a new describe block to test/status-format.test.ts (the PURE formatter suite).
+The assertions must FAIL on current main (formatServiceStatus does not exist) and PASS after:
+- `formatServiceStatus(null)` returns a string that includes "service (v7 — standing supervisor):"
+  and "(not running — no status file)", and does not throw.
+- `formatServiceStatus({ state: 'idle', activation: 2, round: 0, active: 0, blocked: 0,
+  poll_secs: 15, pid: 123, note: 'board drained', last_tick: '2026-08-19T14:00:00Z' })` includes
+  "state: idle", "board: 0 active · 0 blocked", "poll every 15s · pid 123",
+  "last tick: 2026-08-19T14:00:00Z", and "note: board drained" — and does NOT include an
+  "activation #" line (because state !== 'running').
+- `formatServiceStatus({ state: 'running', activation: 3, round: 2, active: 5, blocked: 0,
+  poll_secs: 15, pid: 1, note: 'activation #3', last_tick: 't' })` includes
+  "activation #3 · round 2" and "state: running".
+- `formatServiceStatus({ state: 'stalled', activation: 4, round: 0, active: 2, blocked: 0,
+  poll_secs: 15, pid: 1, note: 'board stuck — awaiting a human', last_tick: 't' })` includes
+  "state: stalled" and "note: board stuck — awaiting a human".
+- `formatServiceStatus({ state: 'idle', active: 0, blocked: 0, poll_secs: 15, pid: 1,
+  last_tick: 't' })` (no `note` field) does NOT include a "note:" line, and does not throw.
+
+VALIDATE (substrate-free — the ONLY validate; needs NO database, NO docker, NO make, NO psql.
+Run it verbatim; it must fail on main and pass after your change):
+    npx vitest run test/status-format.test.ts
+
+CONSTRAINTS:
+- No DB migration. No new view. No network/DB call in the formatter OR the command (except the
+  local file read in the command). Do NOT change loop/service.sh, driver-lib.sh, or the status
+  file shape — only READ it.
+- Keep `formatServiceStatus` pure and total (never throw; missing numeric → 0, missing string →
+  "").  JavaScript only (bin/ainarres.mjs is ESM); tests are vitest in test/status-format.test.ts.
