@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { formatStatus, statusJson, formatEvents, formatReport, reportJson, fmtTokens } from "../bin/ainarres.mjs";
+import { formatStatus, statusJson, formatEvents, formatReport, reportJson, fmtTokens, formatServiceStatus } from "../bin/ainarres.mjs";
 
 // Pure unit test: no substrate, no network, no DB, no token. We import the
 // formatter directly from the CLI module — which must NOT run the CLI on import
@@ -919,5 +919,51 @@ describe("reportJson", () => {
     expect(result.intake.open[0]).toEqual({ task_id: "i0", stage: "proposed_brief" });
     expect(result.intake.open[14]).toEqual({ task_id: "i14", stage: "proposed_brief" });
     expect(result.intake.open.map(r => r.task_id)).toEqual(many.map(r => r.task_id));
+  });
+});
+
+describe("formatServiceStatus", () => {
+  test("null returns header + not-running line, no throw", () => {
+    const out = formatServiceStatus(null);
+    expect(out).toContain("service (v7 \u2014 standing supervisor):");
+    expect(out).toContain("(not running \u2014 no status file)");
+  });
+
+  test("idle status shows state/board/poll/last tick/note lines and NO activation line", () => {
+    const out = formatServiceStatus({
+      state: "idle", activation: 2, round: 0, active: 0, blocked: 0,
+      poll_secs: 15, pid: 123, note: "board drained", last_tick: "2026-08-19T14:00:00Z",
+    });
+    expect(out).toContain("state: idle");
+    expect(out).toContain("board: 0 active \u00b7 0 blocked");
+    expect(out).toContain("poll every 15s \u00b7 pid 123");
+    expect(out).toContain("last tick: 2026-08-19T14:00:00Z");
+    expect(out).toContain("note: board drained");
+    expect(out).not.toContain("activation #");
+  });
+
+  test("running status shows activation #N \u00b7 round N", () => {
+    const out = formatServiceStatus({
+      state: "running", activation: 3, round: 2, active: 5, blocked: 0,
+      poll_secs: 15, pid: 1, note: "activation #3", last_tick: "t",
+    });
+    expect(out).toContain("activation #3 \u00b7 round 2");
+    expect(out).toContain("state: running");
+  });
+
+  test("stalled status shows state + note", () => {
+    const out = formatServiceStatus({
+      state: "stalled", activation: 4, round: 0, active: 2, blocked: 0,
+      poll_secs: 15, pid: 1, note: "board stuck \u2014 awaiting a human", last_tick: "t",
+    });
+    expect(out).toContain("state: stalled");
+    expect(out).toContain("note: board stuck \u2014 awaiting a human");
+  });
+
+  test("no note field omits note line and does not throw", () => {
+    const out = formatServiceStatus({
+      state: "idle", active: 0, blocked: 0, poll_secs: 15, pid: 1, last_tick: "t",
+    });
+    expect(out).not.toContain("note:");
   });
 });
