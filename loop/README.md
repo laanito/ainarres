@@ -128,6 +128,11 @@ Key differences from the batch driver (all in `service.sh`; the primitives are s
   (and, in M26, accepted intake briefs) and runs the designer each round before the pool.
 - **Never a router** (ADR 0024): the demand gate is coarse — "is there active work?" — and
   the tiers self-claim via `SKIP LOCKED`; the service never picks which task goes to whom.
+- **Consumes governance** (design/service.md D6): before spawning a tier the service reads
+  `api.governance_status` and **skips a family temp-banned** for the capability its role needs
+  (`LOOP_CONSUME_GOVERNANCE=1`; the batch driver leaves it off). Best-effort — an unreadable
+  view degrades to spawn-anyway (measured-not-enforced). Reading a denial the substrate already
+  enforces, never routing. (`ainarres governance-status` shows the same view.)
 - **Stalls are held, not spun** (design/service.md D3): a no-progress activation records the
   stuck board signature and enters `stalled` — it will **not** re-activate that board until a
   human changes it (the signature). The cost bound (bounded rounds) is preserved; it neither
@@ -142,8 +147,8 @@ Prove the lifecycle deterministically (no LLMs), the M25 done-test:
 make service-selftest        # loop-reset + MOCK: idle→wake→drain→idle→2nd activation→clean stop
 ```
 
-Deferred to M25 Slice B: consuming governance (`skip_if_banned` — don't spawn a temp-banned
-family) and the **pure** status/liveness formatter (`ainarres service-status` pretty readout).
+Deferred to the M25 Slice B **swarm** half: the **pure** status/liveness formatter (a nice
+`ainarres service-status` readout over the status file) — substrate-free, briefed to the loop.
 
 ## Run it for real (owner-invoked)
 

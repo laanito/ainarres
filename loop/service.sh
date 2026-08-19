@@ -54,6 +54,12 @@ LOOP_IDLE_POLL_SECS="${LOOP_IDLE_POLL_SECS:-15}"  # how often the idle service r
 # empty (it already decomposed) — the one activation-shape difference between the two.
 LOOP_DESIGN_TIERS=("${LOOP_DESIGN_TIERS[@]:-designer}")
 
+# Consume governance (design/service.md D6): before spawning a tier, the service reads
+# api.governance_status and skips a family temp-banned for the capability its role needs
+# (best-effort — an unreadable view degrades to spawn-anyway). The batch driver leaves
+# this off (0), so only the standing service consumes governance.
+export LOOP_CONSUME_GOVERNANCE="${LOOP_CONSUME_GOVERNANCE:-1}"
+
 # The shared coordination primitives (board reads, spawn/reap, teardown, run_activation).
 # shellcheck disable=SC1090,SC1091
 source "$HERE/driver-lib.sh"
@@ -90,7 +96,7 @@ trap 'on_exit' EXIT
 
 # ── Startup ───────────────────────────────────────────────────────────────────
 echo "→ service: loop substrate = ${AINARRES_BASE_URL} (mode=$LOOP_MODE)"
-echo "→ service: standing supervisor up (poll ${LOOP_IDLE_POLL_SECS}s; design: ${LOOP_DESIGN_TIERS[*]}; pool=${LOOP_POOL_SIZE}× '${LOOP_POOL_TIER}'; serial: ${LOOP_SERIAL_TIERS[*]}; frontier: ${LOOP_FRONTIER_PEERS[*]})"
+echo "→ service: standing supervisor up (poll ${LOOP_IDLE_POLL_SECS}s; design: ${LOOP_DESIGN_TIERS[*]}; pool=${LOOP_POOL_SIZE}× '${LOOP_POOL_TIER}'; serial: ${LOOP_SERIAL_TIERS[*]}; frontier: ${LOOP_FRONTIER_PEERS[*]}; consume-governance=${LOOP_CONSUME_GOVERNANCE})"
 echo "→ service: status file = ${SERVICE_STATUS_FILE}  ·  stop with: make service-stop (or SIGTERM)"
 service_status starting "supervisor up"
 

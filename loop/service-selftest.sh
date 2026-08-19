@@ -29,6 +29,15 @@ ai() { "${AINARRES[@]}" "$@"; }
 OVERSIGHT_TOKEN="$(mint_token oversight)"
 DESIGNER_TOKEN="$(mint_token designer)"
 
+# Source the shared lib so we can unit-check skip_if_banned's matching logic directly
+# (Phase 0), independent of the live service.
+# shellcheck disable=SC1090,SC1091
+source "$HERE/driver-lib.sh"
+
+# psql into the LOOP substrate (for seeding a governance ban in the skip test). Mirrors
+# the Makefile's COMPOSE_LOOP. Not a harness sweep, so guard-bin doesn't apply here.
+loop_psql() { docker compose -p ainarres-loop --env-file "$REPO/loop.env" exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d ainarres "$@"; }
+
 STATUS="$RUN_DIR/service.status"
 SVC_LOG="$RUN_DIR/service-selftest.svc.log"
 mkdir -p "$RUN_DIR"
@@ -75,6 +84,20 @@ create_tasks() {
 echo "→ service-selftest: substrate=$AINARRES_BASE_URL  poll=${LOOP_IDLE_POLL_SECS}s  mock_tasks=$LOOP_MOCK_TASKS"
 [ "$(n_total)" -eq 0 ] || fail "expected a fresh (empty) loop board — run via 'make service-selftest' (it loop-resets first). total=$(n_total)"
 
+# ── Phase 0: skip_if_banned matching logic (pure, no service) ─────────────────
+# Set GOV_BANNED by hand and check the family+capability matching directly.
+GOV_BANNED="opencode+big-pickle|role:implementer"
+skip_if_banned cheap-implementer || fail "skip_if_banned: pool family banned for role:implementer must SKIP"
+skip_if_banned qwen-implementer && fail "skip_if_banned: a DIFFERENT family (qwen) must NOT be skipped"
+skip_if_banned frontier && fail "skip_if_banned: grok (not banned) must NOT be skipped"
+GOV_BANNED="grok+grok-4.6|capability:integrate"
+skip_if_banned frontier || fail "skip_if_banned: grok banned for capability:integrate must SKIP the frontier tier"
+skip_if_banned frontier-claude-reviewer && fail "skip_if_banned: the claude reviewer (no capability:integrate) must NOT be skipped"
+GOV_BANNED=""
+skip_if_banned cheap-implementer && fail "skip_if_banned: empty ban set must never skip"
+GOV_BANNED=""   # reset for the live service (it manages its own)
+pass "Phase 0 — skip_if_banned matches on (family, capability): banned tier skipped, others proceed, empty set never skips"
+
 # ── Start the standing service in the background ──────────────────────────────
 bash "$HERE/service.sh" >"$SVC_LOG" 2>&1 &
 SVC_PID=$!
@@ -109,7 +132,40 @@ wait_until 15 is_state idle || fail "service did not return to idle after the se
 [ "$(svc_field activation)" -gt "$first_activation" ] || fail "second batch did not trigger a new activation ($(svc_field activation) !> $first_activation)"
 pass "Phase 3 — second activation (#$(svc_field activation)) on the SAME process (pid=$SVC_PID), no restart"
 
-# ── Phase 4: GRACEFUL STOP ────────────────────────────────────────────────────
+# ── Phase 4: CONSUME GOVERNANCE — skip a temp-banned family (D6) ──────────────
+# Temp-ban the pool family (opencode+big-pickle) for role:implementer in the LOOP
+# substrate, insert work, and assert the running service SKIPS the pool tier (log line)
+# yet still DRAINS — the other (unbanned) implementer tiers pick the work up.
+echo "→ service-selftest: temp-banning the pool family (opencode+big-pickle / role:implementer)…"
+loop_psql -c "
+  insert into app.governance_strikes (family_id, feature_id, strikes, ban_count, first_strike_at, last_strike_at)
+  select af.id, f.id, 5, 1, now() - interval '1 day', now()
+  from app.agent_families af, app.features f
+  where af.key = 'opencode+big-pickle' and f.name = 'role:implementer'
+  on conflict (family_id, feature_id) do nothing;
+  insert into app.feature_denials (family_id, feature_id, reason, expires_at)
+  select af.id, f.id, 'service-selftest temp ban', now() + interval '1 hour'
+  from app.agent_families af, app.features f
+  where af.key = 'opencode+big-pickle' and f.name = 'role:implementer'
+  on conflict (family_id, feature_id) do nothing;
+" >/dev/null || fail "could not seed the governance ban"
+
+banned_activation="$(svc_field activation)"
+create_tasks "$LOOP_MOCK_TASKS"
+echo "→ service-selftest: inserted work under the ban — expecting a pool SKIP + drain via other tiers…"
+wait_until 120 board_all_done || fail "board did not drain while the pool family was banned (active=$(n_active), terminal=$(n_terminal)/$(n_total))"
+wait_until 15 is_state idle || fail "service did not return to idle after the banned-run drain"
+grep -q "SKIP pool tier 'cheap-implementer' — family banned" "$SVC_LOG" \
+  || fail "service did not log skipping the temp-banned pool family (expected a SKIP line in $SVC_LOG)"
+[ "$(svc_field activation)" -gt "$banned_activation" ] || fail "the banned-run did not trigger a new activation"
+# Clear the ban so it doesn't linger.
+loop_psql -c "
+  delete from app.feature_denials where family_id = (select id from app.agent_families where key='opencode+big-pickle') and feature_id = (select id from app.features where name='role:implementer');
+  delete from app.governance_strikes where family_id = (select id from app.agent_families where key='opencode+big-pickle') and feature_id = (select id from app.features where name='role:implementer');
+" >/dev/null || true
+pass "Phase 4 — consumed governance: SKIPPED the temp-banned pool family, drained via the other tiers"
+
+# ── Phase 5: GRACEFUL STOP ────────────────────────────────────────────────────
 echo "→ service-selftest: sending SIGTERM (graceful stop)…"
 kill -TERM "$SVC_PID"
 wait_until 20 bash -c '! kill -0 '"$SVC_PID"' 2>/dev/null' || fail "service did not exit within 20s of SIGTERM"
@@ -117,6 +173,6 @@ svc_rc=0; wait "$SVC_PID" 2>/dev/null || svc_rc=$?
 [ "$svc_rc" -eq 0 ] || fail "service exited non-zero on graceful stop (rc=$svc_rc)"
 [ "$(svc_field state)" = "stopped" ] || fail "status file not marked 'stopped' after stop (state='$(svc_field state)')"
 SVC_PID=""   # reaped; don't let cleanup kill an unrelated pid
-pass "Phase 4 — SIGTERM drained + halted cleanly (exit 0, state=stopped)"
+pass "Phase 5 — SIGTERM drained + halted cleanly (exit 0, state=stopped)"
 
 echo "✓ service-selftest: standing service lifecycle PASSED (idle → wake → drain → idle → second activation → clean stop)."

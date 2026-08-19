@@ -896,6 +896,14 @@ const COMMANDS = {
     const r = await restGet(`abandoned?${q}`, token);
     emit(r.body, r.httpOk);
   },
+  // Raw JSON of api.governance_status (v5, M21/M22) — the family/capability revocation
+  // state (banned/permanent/heal_at/…). Oversight-only view; needs an oversight token.
+  // Used by the standing service to CONSUME governance (loop/driver-lib.sh::skip_if_banned
+  // — don't spawn a temp-banned family), and handy for the owner directly.
+  async "governance-status"(rest, values, token) {
+    const r = await restGet(`governance_status?order=family.asc,capability.asc`, token);
+    emit(r.body, r.httpOk);
+  },
 
   // One-glance oversight summary: fetch board/feed/abandoned views in parallel and
   // hand the rows to the pure formatStatus(). Prints HUMAN TEXT (not JSON) — or
@@ -1065,6 +1073,7 @@ const OPTS = {
   board: { lane: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
   feed: { lane: { type: "string" }, task: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
   abandoned: { lane: { type: "string" }, token: { type: "string" } },
+  "governance-status": { token: { type: "string" } },
   status: { lane: { type: "string" }, limit: { type: "string" }, watch: { type: "boolean" }, interval: { type: "string" }, compact: { type: "boolean" }, json: { type: "boolean" }, token: { type: "string" } },
   events: { lane: { type: "string" }, task: { type: "string" }, family: { type: "string" }, type: { type: "string" }, limit: { type: "string" }, json: { type: "boolean" }, token: { type: "string" } },
   report: { lane: { type: "string" }, limit: { type: "string" }, json: { type: "boolean" }, token: { type: "string" } },
