@@ -156,6 +156,21 @@ human identity, and the substrate's D4 gate is the inner wall.** Per
   input to the brief's shape before persisting (the inbound mirror of
   [ADR 0015](../decisions/0015-egress-as-capability.md)'s guarded egress).
 
+> **Build-time reconciliation (M26 — refines D7).** The "distinct human identity" is a **seeded
+> family** `human+intaker` (`db/seed.sql`), not a new *feature*: `role:intaker` and `lane:intake`
+> already existed from M24, and `create_task`'s `ensure_agent` requires the caller's family to be
+> **registered** (ADR 0007 — an unknown family is `not_eligible`). So the human identity is the
+> M19/roster pattern applied to a human: a registered family holding *only* `[lane:intake,
+> role:intaker]` — no `lane:dev` (cannot create dev work), no `capability:integrate` (cannot
+> merge). Chosen shape (the plan's "HTTP vs subcommand" fork): a **loopback HTTP endpoint**
+> (`bin/intake-server.mjs`, standalone — a zero-dep HS256 minter + `fetch`, no coupling to
+> `bin/ainarres.mjs`). It enforces the ADR 0025 posture in code: **refuses to start** on a
+> non-loopback host or without an `INTAKE_PSK`, and PSK compare is constant-time. `make
+> intake-serve` runs it against the loop substrate; verified with `test/intake-channel.test.ts`
+> (real server + real `create_task`: valid PSK → 201 + brief; missing/wrong PSK → 401, no row;
+> bad body → 400; the identity can open a brief but is refused a dev create and holds no
+> integrate — the inner wall).
+
 ## The supervisor, concretely
 
 The evolution of `driver.sh`'s tail, in pseudocode (the round body is unchanged from v6):

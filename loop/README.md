@@ -150,6 +150,31 @@ make service-selftest        # loop-reset + MOCK: idle→wake→drain→idle→2
 Deferred to the M25 Slice B **swarm** half: the **pure** status/liveness formatter (a nice
 `ainarres service-status` readout over the status file) — substrate-free, briefed to the loop.
 
+## The intake channel (v7 M26, ADR 0024 Stage 2 / ADR 0025)
+
+The **first external ingress**: a loopback-bound HTTP endpoint (`bin/intake-server.mjs`) an
+external Customer POSTs a request to — the intaker's write channel. It authenticates a
+**pre-shared key**, then opens a `proposed_brief` in the `intake` lane **as a distinct human
+identity** (`human+intaker`, holding only `lane:intake` + `role:intaker`), which the standing
+service then decomposes and drains. Kept **local + light** per ADR 0025.
+
+```sh
+INTAKE_PSK=<your-key> make intake-serve         # loopback:3020, targets the loop substrate
+# submit a request:
+curl -s -XPOST 127.0.0.1:3020/intake -H 'X-Intake-Key: <your-key>' \
+     -H 'Content-Type: application/json' -d '{"request":"add a foo widget"}'
+#   → 201 {"ok":true,"brief_id":"…","stage":"proposed_brief"}
+```
+
+Security posture (ADR 0025 — deliberately light, first stage): binds **loopback only** (the
+server *refuses* to start on a non-loopback host), **PSK required** (refuses to start without
+one; constant-time compare), single-owner, no TLS / multi-tenant / rate-limiting (deferred with
+a written widening contract in ADR 0025). **Defence in depth:** the PSK is the outer wall; the
+**unchanged M24 two-tier create-gate** is the inner one — the channel's identity can open a
+brief but the substrate refuses it any dev create or merge, so a channel bug can't grant what
+the substrate withholds. Verified by `test/intake-channel.test.ts` (real server + real
+`create_task`).
+
 ## Run it for real (owner-invoked)
 
 The real run is **owner-started by design**: Claude Code cannot spawn `grok
