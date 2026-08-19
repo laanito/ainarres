@@ -110,11 +110,14 @@ stuck board to a human instead of spinning or exiting, exposes its liveness, and
 ([ADR 0024](../decisions/0024-v7-scope-the-standing-service.md); mechanism in
 [`design/service.md`](../design/service.md) D1–D6)
 
-> **Build split:** the whole **supervisor lifecycle** (idle/wake, no-progress→flag, graceful stop,
-> `skip_if_banned`) is **assisted + mock-verified** — a runtime that spawns workers unattended is
-> trust-critical, and routing-drift or a stuck-non-idle is the exact failure class this milestone
-> guards. The **pure status/liveness formatter** (and any report-line for service state) is
-> **swarm-eligible** (substrate-free, hands-off).
+> **Build split (two slices, mirroring M23/M24):** **Slice A** — the supervisor **lifecycle**
+> (idle/wake, no-progress→stalled, graceful stop) via a shared `driver-lib.sh` (`run_activation`
+> extracted from `driver.sh`), `service.sh`, the Makefile targets, and the mock lifecycle test —
+> **assisted + mock-verified** (a runtime that spawns workers unattended is trust-critical; a
+> routing-drift or a stuck-non-idle is the exact failure class this guards). **Slice B** —
+> **governance consumption** (`skip_if_banned`, D6) assisted, plus the **pure status/liveness
+> formatter** (`ainarres service-status` pretty readout + any report-line) — **swarm-eligible**
+> (substrate-free, hands-off — the recursion target: let the running Slice-A service deliver it).
 
 **Steps**
 - **The idle/wake envelope (D1/D2)** — wrap `driver.sh`'s round loop: `active==0` ⇒

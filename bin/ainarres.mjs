@@ -40,12 +40,19 @@ function fail(msg) {
 
 const bearer = (v) => v.token || process.env.AINARRES_TOKEN;
 
+// `Connection: close` on every request: the CLI has long-lived loops (`heartbeat
+// --watch`, `status --watch`) that call this once per interval. Node's global fetch
+// (undici) pools keep-alive sockets, but PostgREST closes an idle keep-alive connection
+// between our polls — and undici then stalls ~3s reconnecting on the stale socket. That
+// stall silently starved `heartbeat --watch` of renewals (a healthy task got falsely
+// reclaimed under a short lease). A fresh connection per request is cheap on localhost
+// (~15–35ms) and removes the stall entirely.
 async function rpc(name, body, token) {
   let res;
   try {
     res = await fetch(`${BASE}/rpc/${name}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      headers: { "Content-Type": "application/json", Connection: "close", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(body ?? {}),
     });
   } catch (e) {
@@ -64,7 +71,7 @@ async function rpc(name, body, token) {
 async function restGet(path, token) {
   let res;
   try {
-    res = await fetch(`${BASE}/${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    res = await fetch(`${BASE}/${path}`, { headers: { Connection: "close", ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
   } catch (e) {
     fail(`cannot reach ${BASE} (${e.message})`);
   }
