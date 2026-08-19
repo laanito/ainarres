@@ -283,6 +283,42 @@ export function formatEvents(rows = [], { limit = 50 } = {}) {
   return lines.join("\n");
 }
 
+// Pure, TOTAL formatter for the standing service's LOCAL liveness file
+// (loop/run/service.status — one-line JSON). Takes the parsed object or null
+// (no file / absent service) and returns a multi-line string. No I/O, no clock,
+// never throws — missing numerics → 0, missing strings → "", null → not-running.
+export function formatServiceStatus(status) {
+  const lines = ["service (v7 \u2014 standing supervisor):"];
+
+  if (status == null || typeof status !== "object") {
+    lines.push("  (not running \u2014 no status file)");
+    return lines.join("\n");
+  }
+
+  const state = status.state ?? "";
+  const activation = Number(status.activation) || 0;
+  const round = Number(status.round) || 0;
+  const active = Number(status.active) || 0;
+  const blocked = Number(status.blocked) || 0;
+  const poll_secs = Number(status.poll_secs) || 0;
+  const pid = Number(status.pid) || 0;
+  const note = typeof status.note === "string" ? status.note : "";
+  const last_tick = typeof status.last_tick === "string" ? status.last_tick : "";
+
+  lines.push(`  state: ${state}`);
+  if (state === "running") {
+    lines.push(`  activation #${activation} \u00b7 round ${round}`);
+  }
+  lines.push(`  board: ${active} active \u00b7 ${blocked} blocked`);
+  lines.push(`  poll every ${poll_secs}s \u00b7 pid ${pid}`);
+  lines.push(`  last tick: ${last_tick}`);
+  if (note !== "") {
+    lines.push(`  note: ${note}`);
+  }
+
+  return lines.join("\n");
+}
+
 // Pure, deterministic END-OF-RUN report (M16, ADR 0021 D5): a rendering of the
 // board + event timeline a drained loop comes back to. Names what shipped (with
 // PRs), what failed and why, escalations, and per-family activity. No I/O, no
@@ -905,6 +941,21 @@ const COMMANDS = {
     emit(r.body, r.httpOk);
   },
 
+  // Local liveness readout — reads the process's OWN status file (no token,
+  // no network, no DB). Prints formatServiceStatus(parsed) or null-readout
+  // when the file is absent / unparseable.
+  "service-status"(rest, values) {
+    const filePath = values.file ?? "loop/run/service.status";
+    let parsed = null;
+    try {
+      const raw = readFileSync(filePath, "utf8");
+      parsed = JSON.parse(raw);
+    } catch (_) {
+      // file absent or unparseable → not-running
+    }
+    process.stdout.write(formatServiceStatus(parsed) + "\n");
+  },
+
   // One-glance oversight summary: fetch board/feed/abandoned views in parallel and
   // hand the rows to the pure formatStatus(). Prints HUMAN TEXT (not JSON) — or
   // JSON when --json is set. Needs an oversight-capable token at runtime (the views
@@ -1074,6 +1125,7 @@ const OPTS = {
   feed: { lane: { type: "string" }, task: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
   abandoned: { lane: { type: "string" }, token: { type: "string" } },
   "governance-status": { token: { type: "string" } },
+  "service-status": { file: { type: "string" } },
   status: { lane: { type: "string" }, limit: { type: "string" }, watch: { type: "boolean" }, interval: { type: "string" }, compact: { type: "boolean" }, json: { type: "boolean" }, token: { type: "string" } },
   events: { lane: { type: "string" }, task: { type: "string" }, family: { type: "string" }, type: { type: "string" }, limit: { type: "string" }, json: { type: "boolean" }, token: { type: "string" } },
   report: { lane: { type: "string" }, limit: { type: "string" }, json: { type: "boolean" }, token: { type: "string" } },
@@ -1121,7 +1173,7 @@ if (isMain) {
   } else {
     const { values, positionals } = args(rest, OPTS[cmd]);
     const token = bearer(values);
-    const needsToken = !["token", "version"].includes(cmd);
+    const needsToken = !["token", "version", "service-status"].includes(cmd);
     if (needsToken && !token) fail(`${cmd}: no token (set AINARRES_TOKEN or pass --token)`);
     await COMMANDS[cmd](rest, values, token, positionals[0]);
   }

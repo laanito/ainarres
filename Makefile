@@ -130,8 +130,7 @@ service-stop:
 ## Show the service's liveness (raw status file for now; the pretty readout is the Slice
 ## B pure formatter — swarm-built).
 service-status:
-	@if [ -f loop/run/service.status ]; then cat loop/run/service.status; \
-	 else echo "service: not running (no status file)"; fi
+	@node bin/ainarres.mjs service-status
 
 ## Deterministic lifecycle test (MOCK): a fresh loop substrate + the standing service —
 ## idles empty, wakes on inserted work, drains, idles again, second activation with NO
