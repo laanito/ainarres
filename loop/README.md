@@ -7,8 +7,13 @@ driver. No component here coordinates — coordination is the substrate's job
 
 ```
 loop/
-  driver.sh                the dumb driver: brief → designer → each round runs a CONCURRENT
-                           pool of cheap implementers + the serial tiers → stop when drained
+  driver.sh                the dumb BATCH driver: brief → designer → ONE activation (rounds
+                           of a CONCURRENT pool + serial tiers + frontier peers) → EXIT when drained
+  service.sh               the STANDING SERVICE (v7, ADR 0024): always-on supervisor — idle when
+                           the board is empty, wake + run one activation on pending work, never exits
+  driver-lib.sh            the SHARED coordination primitives (board reads, spawn/reap, teardown,
+                           run_activation) — sourced by BOTH driver.sh and service.sh
+  service-selftest.sh      deterministic mock lifecycle test (M25): idle→wake→drain→idle→stop
   worktree.sh              per-sweep git worktree isolation (M17): enter/teardown/gc
   roles.sh                 config: the pool tier + serial tiers + frontier peers + each tier's harness, token features
   grok-frontier.sh         real frontier harness wrapper (grok; reviewer + the SINGLE integrator + escalated impl)
@@ -98,8 +103,47 @@ board is **drained** (every dev task terminal → success, exit 0) or **nobody c
 it** (stuck → exit 1, reported). It does not poll forever: when no tier has work left,
 it stops. Termination is unchanged by the M18 pool: `run_pool`/`run_sweep` both reap
 their sweeps before a round returns, so when the round body finishes nothing is running
-— "board empty AND pool idle" (parallel-loop.md D4). (Token budgets and always-on
-daemonized tiers remain later slices.)
+— "board empty AND pool idle" (parallel-loop.md D4). (Token budgets remain a later slice.)
+
+## The standing service (v7, ADR 0024 / design/service.md)
+
+`make loop-run` is the **batch** shape: one brief, drain, exit. The **standing service**
+(`make service`) is v7's flip — it **retires the crank**. Instead of exiting when the
+board drains, it **idles** (holding no workers) and **wakes** on the next poll when work
+appears, running the **same activation** (`run_activation`, shared via `driver-lib.sh`)
+the batch driver runs — so AINARRES becomes a process that *runs*, not a script you *run*.
+
+```sh
+make service                 # start the always-on supervisor (foreground; owner-run)
+make service-status          # its liveness: running | idle | stalled | stopped (raw JSON for now)
+make service-stop            # SIGTERM it → drains the in-flight activation, then halts cleanly
+```
+
+Key differences from the batch driver (all in `service.sh`; the primitives are shared):
+
+- **Termination inverts** (design/service.md D1): drained ≠ done, drained = *quiescent*.
+  The idle service spawns nothing and holds no lease; it wakes every `LOOP_IDLE_POLL_SECS`.
+- **It decomposes continuously** (`LOOP_DESIGN_TIERS=(designer)`): unlike the batch driver
+  (one upfront designer pass on the brief), the service keeps seeing proposed dev tasks
+  (and, in M26, accepted intake briefs) and runs the designer each round before the pool.
+- **Never a router** (ADR 0024): the demand gate is coarse — "is there active work?" — and
+  the tiers self-claim via `SKIP LOCKED`; the service never picks which task goes to whom.
+- **Stalls are held, not spun** (design/service.md D3): a no-progress activation records the
+  stuck board signature and enters `stalled` — it will **not** re-activate that board until a
+  human changes it (the signature). The cost bound (bounded rounds) is preserved; it neither
+  spins nor exits. Stranded *claims* stay surfaced by the M23 auditor health watch.
+- **Graceful stop** (design/service.md D5): SIGTERM sets a draining flag; `run_activation`
+  finishes the current round's (already-reaped) sweeps, starts no new round, and the exit
+  trap runs the same `stop_active` teardown — "always-on" never means "cannot be turned off".
+
+Prove the lifecycle deterministically (no LLMs), the M25 done-test:
+
+```sh
+make service-selftest        # loop-reset + MOCK: idle→wake→drain→idle→2nd activation→clean stop
+```
+
+Deferred to M25 Slice B: consuming governance (`skip_if_banned` — don't spawn a temp-banned
+family) and the **pure** status/liveness formatter (`ainarres service-status` pretty readout).
 
 ## Run it for real (owner-invoked)
 

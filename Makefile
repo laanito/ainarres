@@ -8,7 +8,8 @@ COMPOSE := docker compose
 COMPOSE_LOOP := docker compose -p ainarres-loop --env-file loop.env
 
 .PHONY: up down reset migrate seed test verify-down logs ps \
-        loop-up loop-down loop-seed loop-reset loop-ps loop-logs verify-isolation
+        loop-up loop-down loop-seed loop-reset loop-ps loop-logs verify-isolation \
+        service service-stop service-status service-selftest
 
 ## Bring the stack up (db → migrate → postgrest) and wait for db health.
 up:
@@ -107,3 +108,33 @@ loop-run:
 ## brief to `done` with no human coordination. This is M14's done-test.
 loop-selftest: loop-reset
 	@LOOP_MODE=mock bash loop/driver.sh loop/examples/selftest-brief.txt
+
+# ── The standing service (v7, ADR 0024 / design/service.md) ───────────────────
+# Retires the crank: an always-on supervisor that idles when the board is empty and
+# wakes to drain pending work — no human runs it per feature. `make loop-run` stays as
+# the one-shot batch convenience; `make service` is v7's default. Runs in the FOREGROUND
+# (owner-started, owner-run under the host's own service manager if daemonized — ADR 0025).
+
+## Start the standing supervisor (foreground; Ctrl-C or `make service-stop` to halt).
+service:
+	@bash loop/service.sh
+
+## Ask a running service to stop: SIGTERM its pid (from the status file) → it drains the
+## in-flight activation, then halts cleanly (design/service.md D5).
+service-stop:
+	@pid=$$(node -e 'try{process.stdout.write(String(JSON.parse(require("fs").readFileSync("loop/run/service.status","utf8")).pid||""))}catch{process.stdout.write("")}'); \
+	 if [ -n "$$pid" ] && kill -0 "$$pid" 2>/dev/null; then \
+	   kill -TERM "$$pid" && echo "service: sent SIGTERM to pid $$pid (draining, will halt)"; \
+	 else echo "service: not running (no live pid in loop/run/service.status)"; fi
+
+## Show the service's liveness (raw status file for now; the pretty readout is the Slice
+## B pure formatter — swarm-built).
+service-status:
+	@if [ -f loop/run/service.status ]; then cat loop/run/service.status; \
+	 else echo "service: not running (no status file)"; fi
+
+## Deterministic lifecycle test (MOCK): a fresh loop substrate + the standing service —
+## idles empty, wakes on inserted work, drains, idles again, second activation with NO
+## restart, graceful stop. This is M25's done-test (design/service.md).
+service-selftest: loop-reset
+	@LOOP_MODE=mock bash loop/service-selftest.sh

@@ -78,12 +78,26 @@ In batch mode a full round that moved nothing meant "stop, we're done/stuck" →
 service must not exit, but also must not **spin** (the cost-control property is non-negotiable —
 [`parallel-loop.md`](parallel-loop.md) D4). So the `LOOP_MAX_ROUNDS` / board-signature-unchanged
 guard becomes a **per-activation circuit breaker**: if an activation's rounds stop progressing the
-board, the supervisor **stops scaling that stuck work**, raises it to the human via the M23
-**operational auditor's health path** (a stalled/stranded flag — no auto-penalty, the M22/M23
-shape), and **returns to idle**. It does not burn tokens re-spawning against a stuck board, and it
-does not die — the stuck feature waits for a human exactly as a batch no-progress run does today,
-only the process survives to serve the next feature. Cost bound preserved; termination replaced by
-quiescence-plus-a-flag.
+board, the supervisor **stops scaling that stuck work**, marks the board stuck, and **returns to
+idle** — and, crucially, will **not re-activate** that same board until its signature *changes* (a
+human intervening). It does not burn tokens re-spawning against a stuck board, and it does not die —
+the stuck feature waits for a human exactly as a batch no-progress run does today, only the process
+survives to serve the next feature. Cost bound preserved; termination replaced by
+quiescence-plus-a-signal.
+
+> **Build-time reconciliation (M25 Slice A — amends the original D3, which said "raise an M23
+> operational flag").** `api.raise_operational_flag` is **family + capability-scoped** (M23), but a
+> *whole-board* stall — "no tier can move any of the active tasks" — has **no single family to
+> attribute** a substrate flag to. And the two things that *do* have a family — a **stranded claim**
+> (a worker that died holding a task) — are already surfaced by the **M23 auditor health watch via
+> `api.abandoned`**, by family, independently. So the service's stall handling is: enter a local
+> **`stalled`** state (the status-file `state` + a loud stderr log — the human-facing signal),
+> record the stuck **board signature**, and refuse to re-activate until that signature changes.
+> It does **not** raise a redundant, un-attributable substrate flag. This is the same
+> substrate-meets-design yield as M21 (strikes can't live in `feature_denials`), M22 (actions can't
+> be events), and M24 (the intake project can't live in seed): the correct-first core is the cheap
+> place for it to surface. The `stalled` local state *is* the flag D3 promised; the substrate-side
+> flagging of the cases that *have* a family stays the M23 health watch's job, unduplicated.
 
 **D4 — Liveness is a local status file, not substrate truth.** A service is a **fungible,
 stateless coordinator** ([vision](../analysis/vision.md): "the substrate has no concept of which
