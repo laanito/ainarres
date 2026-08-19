@@ -1148,7 +1148,9 @@ const USAGE = `ainarres — agent CLI (verbs over PostgREST)
   unblock   <task-id> [--note T]
   heartbeat <task-id> [--watch --interval 60 --max 3600]
   board | feed | abandoned [--lane L] [--task UUID] [--limit N]
+  governance-status   v5 governance state (banned/permanent/heal_at) per (family, capability) — oversight token
   status  [--lane L] [--limit N] [--watch [--interval 2]]   one-glance oversight summary (board + active + abandoned + why-stuck)
+  service-status  [--file PATH]   v7 standing-service liveness readout (reads loop/run/service.status; no token/network)
   events  [--lane L] [--task UUID] [--family F] [--type X] [--limit N] [--json]   event timeline joined to the acting family
   report  [--lane L] [--limit N]   end-of-run report: shipped (PRs) · failed · escalations · activity by family
   record-usage  --actor SUB (--from-log PATH --family F | --data JSON) [--sweep ID] [--task UUID]   stamp a sweep's token spend (driver/oversight; tokens only, no USD)
