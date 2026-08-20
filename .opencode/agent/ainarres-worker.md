@@ -1,7 +1,7 @@
 ---
 description: AINARRES snippet worker — claims tasks from the snippets queue, writes solutions, self-validates, and advances them to review.
 mode: primary
-model: ollama/qwen3.6:35b-mlx
+model: ollama/qwen3.8:27b-mlx
 temperature: 0.1
 tools:
   bash: true

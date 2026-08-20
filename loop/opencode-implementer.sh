@@ -41,7 +41,7 @@ if [ -n "${LOOP_SWEEP_ID:-}" ]; then
   [ -f "$SRC_DATA/auth.json" ] && ln -sf "$SRC_DATA/auth.json" "$XDG_DATA_HOME/opencode/auth.json"
 fi
 
-MODEL="${OPENCODE_MODEL:-ollama/qwen3.6:35b-mlx}"
+MODEL="${OPENCODE_MODEL:-ollama/qwen3.8:27b-mlx}"
 
 # Resolve the opencode binary robustly. Pollers run in a non-interactive shell that
 # usually does NOT have ~/.opencode/bin on PATH (the harness lives outside the system

@@ -1,7 +1,7 @@
 ---
 description: AINARRES implementer — claims dev-lane tasks at the implementing stage, writes code + tests on a branch, self-validates, pushes, and advances to review.
 mode: primary
-model: ollama/qwen3.6:35b-mlx
+model: ollama/qwen3.8:27b-mlx
 temperature: 0.1
 tools:
   bash: true
