@@ -21,9 +21,11 @@ Each version has removed one human touch-point:
 | v2 self-development | "write the code by hand" |
 | v3 hands-off loop | "babysit the running pipeline" |
 | v4 swarm + federation | "run one worker at a time / one maker" |
-| **v5 governance** (in progress) | "judge each family by hand" |
-| **v6 candidate — seat the bookends** | "hand-craft the brief (intaker) · hand-check delivery & health (auditor)" |
-| **v7 candidate — the standing service** | "start & watch the machine · sit at the terminal" |
+| **v5 governance** (done) | "judge each family by hand" |
+| **v6 seat the bookends** (done) | "hand-craft the brief (intaker) · hand-check delivery & health (auditor)" |
+| **v7 the standing service** (done) | "start & watch the machine · sit at the terminal" |
+| **v7.1 the precise service** (designed: [0026](../decisions/0026-v7-1-demand-shaped-scaling.md) / [0027](../decisions/0027-v7-1-push-wake.md)) | "pay for the whole fleet on every wake" |
+| **v8 candidate — the agent operator seat** ([0028](../decisions/0028-v8-scope-the-agent-operator-seat.md), Proposed) | "hold the keys and the terminal yourself" |
 
 **Roles before runtime.** v6 seats the two out-of-loop roles *by hand first* — additive
 grants, no topology change, no new attack surface: safe foundations. **v7's always-on
@@ -116,6 +118,47 @@ input continuously. It deserves its own **threat-model ADR at the start of v7**,
 (The intaker's *channel* is the inbound counterpart to the integrator's guarded egress — auth /
 validate / sanitize *before* input becomes a row.)
 
+## v8 candidate — "the agent operator seat" (delegate the terminal, not the keys)
+
+Promoted from a gesture to a **Proposed scope ADR**: [0028](../decisions/0028-v8-scope-the-agent-operator-seat.md).
+The four operator skills (`skills/ainarres-operator-*.md`, #127) made the gap visible — the
+operator is the only actor in AINARRES that was never *modelled*, because it has always been the
+owner at a terminal. An agent in that seat occupies all five places v5–v7 deliberately left to a
+human at once, and holds the signing key besides. The ADR decides the seat becomes **bounded,
+attributable, ledgered, and governed** without moving any boundary v5 drew.
+
+**The sequence — ordered, and each step is useful alone.** Step 0 needs no ADR; steps 1–3 are the
+ADR's build; v7.1 runs beside them.
+
+- **Step 0 — delegated monitoring (available now).** An agent reads the board, reports health, and
+  recommends; the human does every write. Needs none of the ADR: the merged monitor skill plus a
+  read token. *One dependency, found while scoping it:* the `oversight` PG role carries `EXECUTE`
+  on `api.set_permanent_ban` / `api.lift_ban`, so an oversight token is **not** a read-only
+  credential — bounded delegation needs a narrower read-only role (view `SELECT`s, no governance
+  RPCs, no `record_usage`). That role is also the first brick of the ADR's envelope, so it is not
+  throwaway work. Without it, step 0 is *trusted* delegation, which is a choice, not a boundary.
+- **Step 1 — the seat's preconditions (bug-shaped, not design-shaped).** Nothing works the
+  `intake` lane; the standing design pass is mis-wired (`LOOP_DESIGN_TIERS` spawns `designer` with
+  no brief, so `claude-frontier.sh` falls to its reviewer prompt); no detector for a
+  stuck-but-alive worker — the eyes a delegated seat no longer has. Until these land, "post a
+  request and walk away" does not hold, whoever is operating.
+- **Step 2 — the seat identity + the operator action ledger.** Its own family (so operator actions
+  stop scoring worker track records) and an append-only ledger for the instance-scoped acts that
+  cannot be events (`events.task_id` is `NOT NULL` — the M22 D7 reconciliation, reused).
+- **Step 3 — the credential envelope.** The ADR's core, and the piece that needs owner sign-off:
+  short-TTL credentials the seat cannot widen, issued by something it cannot reconfigure, with the
+  signing key out of its reach. Permanent ban/lift, capability grants, and key custody stay human.
+- **Beside it — v7.1** ([0026](../decisions/0026-v7-1-demand-shaped-scaling.md) then
+  [0027](../decisions/0027-v7-1-push-wake.md)): cost first, latency second. Prerequisite to none of
+  the above, but an always-reacting operator is exactly the workload whose fleet-spawn cost 0026
+  removes.
+
+**What v8 does not do:** run the operator off-host (a heavier revision of
+[0025](../decisions/0025-v7-security-posture-local-service.md)), hand the seat the human-gated
+powers, or replace the human auditor. ADR 0028 makes the auditor's human identity a *structural*
+requirement of the operator seat — which pushes "automated qualitative judgment" (below) further
+out, not nearer.
+
 ## v8+ gestures (even rougher)
 
 Pulled from the standing deferred lists ([0021](../decisions/0021-v4-scope-the-swarm.md) §
@@ -134,7 +177,11 @@ out-of-scope, [0022](../decisions/0022-v5-scope-governance.md) § deferred):
 
 ## Next action
 
-v5 (M20–M22) landed. The **v6** candidate has graduated to a committed scope
-([ADR 0023](../decisions/0023-v6-scope-seat-the-bookends.md): seat both bookends — auditor
-operational facet first, then the intaker). Next: the two design notes + `plans/v6-plan.md`.
-**v7** (API + service) remains a candidate here, to promote on top of v6.
+v5, v6, and v7 have all landed (`main` @ #124: the crank is retired, both bookends seated, the
+local intake channel open). v7.1 is **designed and unbuilt** (#126). The **v8** candidate has a
+Proposed scope ADR ([0028](../decisions/0028-v8-scope-the-agent-operator-seat.md)) whose authority
+split awaits owner sign-off.
+
+Immediate: **step 0 above** — stand up delegated monitoring, deciding first whether it is *bounded*
+(build the read-only role) or *trusted* (an oversight token plus discipline). Then step 1's
+precondition fixes, which are worth doing whoever ends up operating.
