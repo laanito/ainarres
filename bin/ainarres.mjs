@@ -378,7 +378,35 @@ function fmtHeal(secs) {
   return `${h}h ${m}m`;
 }
 
-export function formatReport({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [], spendAnomalies = [], operationalFlags = [], openBriefs = [] } = {}, { lane = null } = {}) {
+// Format a PostgREST interval string (e.g. "00:45:00", "03:20:00",
+// "1 day 02:00:00") as a compact human duration like "45m" or "3h 20m".
+// Days fold into hours; minutes are TRUNCATED (never rounded); anything
+// unparseable (null, undefined, non-string, garbage) reads as "unknown".
+// Pure and TOTAL: never throws, never reads the clock.
+export function fmtDuration(interval) {
+  if (typeof interval !== "string") return "unknown";
+  const s = interval.trim();
+  if (s.length === 0) return "unknown";
+  let days = 0;
+  let hms = s;
+  const dayMatch = s.match(/^(-?\d+)\s+day/i);
+  if (dayMatch) {
+    days = Number(dayMatch[1]);
+    hms = s.slice(dayMatch[0].length).trim();
+  }
+  if (hms.startsWith("-")) hms = hms.slice(1);
+  const parts = hms.split(":");
+  if (parts.length !== 3) return "unknown";
+  const h = Number(parts[0]);
+  const m = Number(parts[1]);
+  const sec = Number(parts[2]);
+  if (!Number.isFinite(h) || !Number.isFinite(m) || !Number.isFinite(sec)) return "unknown";
+  const totalH = days * 24 + h;
+  if (totalH === 0) return `${m}m`;
+  return `${totalH}h ${m}m`;
+}
+
+export function formatReport({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [], spendAnomalies = [], operationalFlags = [], openBriefs = [], stuckTasks = [] } = {}, { lane = null } = {}) {
   const lines = [lane ? `end-of-run report — lane ${lane}` : "end-of-run report — all lanes"];
 
   // What shipped: tasks at a terminal stage.
@@ -566,18 +594,32 @@ export function formatReport({ board = [], timeline = [], trackRecord = [], gove
   // the entire governance section. Pure, null-guarded, never throws. Overspending
   // reads as a COST signal ("cost"), never as a ban recommendation; everything else
   // reads as "review".
+  // v8 — stuck-alive watch: rows from api.stuck_tasks (a worker ALIVE but stuck,
+  // holding a live lease while the task never moves). Rendered AFTER the health
+  // rows and BEFORE the spend rows, capped at the first 10 in the view's own order
+  // (longest-held first — do NOT re-sort). A stuck row is a CANDIDATE for a human
+  // to look at, never a verdict: tagged "(review)", no consequence computed.
   lines.push("operational (v6 — health & spend watch):");
   const healthRows = board
     .filter(r => r && r.abandoned === true)
     .sort((a, b) => (a.task_id ?? "").localeCompare(b.task_id ?? ""));
+  const stuckRows = stuckTasks.slice(0, 10);
   const spendRows = [...spendAnomalies].sort((a, b) =>
     (a.family ?? "").localeCompare(b.family ?? "") || (a.capability ?? "").localeCompare(b.capability ?? ""));
   const flagRows = operationalFlags.slice(0, 10);
-  if (healthRows.length === 0 && spendRows.length === 0 && flagRows.length === 0) {
+  if (healthRows.length === 0 && stuckRows.length === 0 && spendRows.length === 0 && flagRows.length === 0) {
     lines.push("  (all clear — no health, spend, or operational-flag anomalies)");
   } else {
     for (const r of healthRows) {
       lines.push(`  - health: ${r.task_id} stalled in ${r.stage}, held by ${r.claimed_by ?? "—"} (review)`);
+    }
+    for (const r of stuckRows) {
+      const family = r.family ?? "—";
+      if (r.kind === "heartbeat_treadmill") {
+        lines.push(`  - stuck: ${r.task_id} in ${r.stage}, held by ${family} for ${fmtDuration(r.held_for)}, lease renewed +${fmtDuration(r.extended_by)} — alive, not progressing (review)`);
+      } else {
+        lines.push(`  - stuck: ${r.task_id} in ${r.stage}, held by ${family} for ${fmtDuration(r.held_for)}, silent ${fmtDuration(r.silent_for)} (review)`);
+      }
     }
     for (const r of spendRows) {
       if (r.anomaly === "no_delivery_spend") {
@@ -597,7 +639,7 @@ export function formatReport({ board = [], timeline = [], trackRecord = [], gove
 // Pure, TOTAL JSON shaper for the end-of-run report. Same two-arg signature as
 // formatReport: rows in (already fetched), plain object out (no I/O, no clock,
 // never throws). Mirrors the same structure report --json will emit.
-export function reportJson({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [], spendAnomalies = [], operationalFlags = [], openBriefs = [] } = {}, { lane = null } = {}) {
+export function reportJson({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [], spendAnomalies = [], operationalFlags = [], openBriefs = [], stuckTasks = [] } = {}, { lane = null } = {}) {
   const shipped = board
     .filter((r) => r.is_terminal === true)
     .map((row) => {
@@ -630,7 +672,9 @@ export function reportJson({ board = [], timeline = [], trackRecord = [], govern
     },
     // M23 Slice B — operational watch: health derived from the board (family is the
     // JSON null fallback here, NOT the em dash used in the text rendering), spend
-    // passed through as given, flags capped at the 10 most recent.
+    // passed through as given, flags capped at the 10 most recent. v8: stuck rows
+    // (api.stuck_tasks) pass through UNCHANGED, capped at 10 — the JSON shape stays
+    // dumb (no fmtDuration, no reshaping).
     operational: {
       health: board
         .filter(r => r && r.abandoned === true)
@@ -638,6 +682,7 @@ export function reportJson({ board = [], timeline = [], trackRecord = [], govern
         .sort((a, b) => (a.task_id ?? "").localeCompare(b.task_id ?? "")),
       spend: spendAnomalies,
       flags: operationalFlags.slice(0, 10),
+      stuck: stuckTasks.slice(0, 10),
     },
   };
 }
@@ -1044,7 +1089,9 @@ const COMMANDS = {
     // a substrate without them still yields a full report.
     // M24: open_briefs is unfiltered and degrades to [] — a substrate without the
     // intake view still yields a full report.
-    const [b, t, tr, gov, af, ga, sa, of, ob] = await Promise.all([
+    // v8: stuck_tasks is unfiltered with NO order= param (the view's own order is
+    // authoritative) and degrades to [] the same way.
+    const [b, t, tr, gov, af, ga, sa, of, ob, st] = await Promise.all([
       restGet(`board?${boardQ}`, token),
       restGet(`timeline?${tlQ}`, token),
       restGet(`family_track_record?order=family.asc,capability.asc`, token),
@@ -1054,6 +1101,7 @@ const COMMANDS = {
       restGet(`spend_anomalies?order=family.asc,capability.asc`, token),
       restGet(`operational_flags?order=created_at.desc`, token),
       restGet(`open_briefs?order=created_at.desc`, token),
+      restGet(`stuck_tasks`, token),
     ]);
     for (const r of [b, t]) {
       if (!r.httpOk) { emit(r.body ?? { ok: false, code: "http_error", status: r.status }, false); return; }
@@ -1065,10 +1113,11 @@ const COMMANDS = {
     const spendAnomalies = sa.httpOk && Array.isArray(sa.body) ? sa.body : [];
     const operationalFlags = of.httpOk && Array.isArray(of.body) ? of.body : [];
     const openBriefs = ob.httpOk && Array.isArray(ob.body) ? ob.body : [];
+    const stuckTasks = st.httpOk && Array.isArray(st.body) ? st.body : [];
     if (values.json) {
-      process.stdout.write(`${JSON.stringify(reportJson({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions, spendAnomalies, operationalFlags, openBriefs }, { lane }), null, 2)}\n`);
+      process.stdout.write(`${JSON.stringify(reportJson({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions, spendAnomalies, operationalFlags, openBriefs, stuckTasks }, { lane }), null, 2)}\n`);
     } else {
-      process.stdout.write(`${formatReport({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions, spendAnomalies, operationalFlags, openBriefs }, { lane })}\n`);
+      process.stdout.write(`${formatReport({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions, spendAnomalies, operationalFlags, openBriefs, stuckTasks }, { lane })}\n`);
     }
   },
 

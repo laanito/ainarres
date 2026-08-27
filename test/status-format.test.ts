@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { formatStatus, statusJson, formatEvents, formatReport, reportJson, fmtTokens, formatServiceStatus } from "../bin/ainarres.mjs";
+import { formatStatus, statusJson, formatEvents, formatReport, reportJson, fmtTokens, fmtDuration, formatServiceStatus } from "../bin/ainarres.mjs";
 
 // Pure unit test: no substrate, no network, no DB, no token. We import the
 // formatter directly from the CLI module — which must NOT run the CLI on import
@@ -709,6 +709,80 @@ describe("formatReport", () => {
     expect(opSection).not.toContain("ban");
   });
 
+  // ── v8 — stuck-alive watch (api.stuck_tasks) ──────────────────────────────
+
+  test("stuck: silent_hold row renders inside the operational section, after health and before spend", () => {
+    const out = formatReport({
+      board: [{ task_id: "h1", stage: "implementing", claimed_by: "fam-x", abandoned: true }],
+      stuckTasks: [{ task_id: "t1", stage: "implementing", family: "opencode+big-pickle", kind: "silent_hold", held_for: "01:30:00", silent_for: "01:30:00" }],
+      spendAnomalies: [{ family: "c", capability: "role:implementer", anomaly: "overspending", tokens_per_delivery: 5000, multiple_over_median: 5 }],
+    });
+    expect(out).toContain("  - stuck: t1 in implementing, held by opencode+big-pickle for 1h 30m, silent 1h 30m (review)");
+    // Order: health, then stuck, then spend.
+    const healthIdx = out.indexOf("  - health: h1");
+    const stuckIdx = out.indexOf("  - stuck: t1");
+    const spendIdx = out.indexOf("c / role:implementer: overspending");
+    expect(healthIdx).toBeGreaterThan(-1);
+    expect(stuckIdx).toBeGreaterThan(healthIdx);
+    expect(spendIdx).toBeGreaterThan(stuckIdx);
+  });
+
+  test("stuck: heartbeat_treadmill row renders lease renewed +duration and alive, not progressing", () => {
+    const out = formatReport({
+      stuckTasks: [{ task_id: "t2", stage: "reviewing", family: "grok+grok-build", kind: "heartbeat_treadmill", held_for: "03:20:00", extended_by: "02:00:00" }],
+    });
+    expect(out).toContain("  - stuck: t2 in reviewing, held by grok+grok-build for 3h 20m, lease renewed +2h 0m — alive, not progressing (review)");
+  });
+
+  test("stuck: null/absent family renders held by —", () => {
+    const out = formatReport({
+      stuckTasks: [{ task_id: "t3", stage: "implementing", family: null, kind: "silent_hold", held_for: "00:45:00", silent_for: "00:45:00" }],
+    });
+    expect(out).toContain("  - stuck: t3 in implementing, held by — for 45m, silent 45m (review)");
+  });
+
+  test("stuck: non-empty rows suppress the all-clear line; all-empty still prints it", () => {
+    const out = formatReport({
+      stuckTasks: [{ task_id: "t1", stage: "implementing", family: "f", kind: "silent_hold", held_for: "00:45:00", silent_for: "00:45:00" }],
+    });
+    expect(out).not.toContain("(all clear — no health, spend, or operational-flag anomalies)");
+
+    const clear = formatReport({});
+    expect(clear).toContain("  (all clear — no health, spend, or operational-flag anomalies)");
+  });
+
+  test("stuck: more than 10 rows renders exactly 10 stuck lines, in the given order", () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      task_id: `s${i}`, stage: "implementing", family: `fam-${i}`, kind: "silent_hold", held_for: "00:45:00", silent_for: "00:45:00",
+    }));
+    const out = formatReport({ stuckTasks: many });
+    const stuckLines = out.split("\n").filter(l => l.startsWith("  - stuck: "));
+    expect(stuckLines.length).toBe(10);
+    expect(stuckLines[0]).toContain("s0");
+    expect(stuckLines[9]).toContain("s9");
+    expect(stuckLines.join("\n")).not.toContain("s10");
+    expect(stuckLines.join("\n")).not.toContain("s11");
+  });
+
+  test("stuck: rows are tagged (review), never ban, and no consequence is computed", () => {
+    const out = formatReport({
+      stuckTasks: [{ task_id: "t1", stage: "implementing", family: "f", kind: "silent_hold", held_for: "00:45:00", silent_for: "00:45:00" }],
+    });
+    expect(out).toContain("(review)");
+    expect(out).not.toContain("ban");
+    expect(out).not.toContain("BAN");
+  });
+
+  test("formatReport({}) still renders every existing section and does not throw", () => {
+    expect(() => formatReport({})).not.toThrow();
+    const out = formatReport({});
+    expect(out).toContain("shipped (");
+    expect(out).toContain("family track record");
+    expect(out).toContain("governance (v5");
+    expect(out).toContain("intake (v6 — open briefs):");
+    expect(out).toContain("operational (v6 — health & spend watch):");
+  });
+
   // ── M24 Slice B — intake watch (open briefs) ──────────────────────────────
 
   test("intake block: empty briefs print the header + (no briefs), every existing section still renders, no throw", () => {
@@ -774,6 +848,27 @@ describe("fmtTokens", () => {
   });
 });
 
+describe("fmtDuration", () => {
+  test("formats PostgREST interval strings per the rendering rule", () => {
+    expect(fmtDuration("00:45:00")).toBe("45m");
+    expect(fmtDuration("03:20:00")).toBe("3h 20m");
+    expect(fmtDuration("1 day 02:00:00")).toBe("26h 0m");
+    expect(fmtDuration("00:00:30")).toBe("0m");
+  });
+
+  test("null / undefined / non-string / unparseable all read as unknown, never throws", () => {
+    expect(fmtDuration(null)).toBe("unknown");
+    expect(fmtDuration(undefined)).toBe("unknown");
+    expect(fmtDuration(42)).toBe("unknown");
+    expect(fmtDuration("")).toBe("unknown");
+    expect(fmtDuration("garbage")).toBe("unknown");
+    expect(fmtDuration("abc:def:ghi")).toBe("unknown");
+    expect(fmtDuration("1 day")).toBe("unknown");
+    expect(() => fmtDuration(null)).not.toThrow();
+    expect(() => fmtDuration("00:45:00")).not.toThrow();
+  });
+});
+
 describe("reportJson", () => {
   test("(1) shipped task with pr, cross-family review, and full attribution", () => {
     const board = [
@@ -817,7 +912,7 @@ describe("reportJson", () => {
       auditFlags: [],
       governanceActions: [],
       intake: { proposed: 0, briefed: 0, accepted: 0, open: [] },
-      operational: { health: [], spend: [], flags: [] },
+      operational: { health: [], spend: [], flags: [], stuck: [] },
     });
   });
 
@@ -843,7 +938,7 @@ describe("reportJson", () => {
       auditFlags: [],
       governanceActions: [],
       intake: { proposed: 0, briefed: 0, accepted: 0, open: [] },
-      operational: { health: [], spend: [], flags: [] },
+      operational: { health: [], spend: [], flags: [], stuck: [] },
     });
   });
 
@@ -865,6 +960,7 @@ describe("reportJson", () => {
       ],
       spend: spendAnomalies,
       flags: operationalFlags,
+      stuck: [],
     });
   });
 
@@ -876,6 +972,19 @@ describe("reportJson", () => {
     expect(result.operational.flags.length).toBe(10);
     expect(result.operational.flags[0].family).toBe("f0");
     expect(result.operational.flags[9].family).toBe("f9");
+  });
+
+  test("(6) stuck rows pass through UNCHANGED in operational.stuck, capped at 10", () => {
+    const stuckTasks = [{ task_id: "t1", stage: "implementing", family: "f", kind: "silent_hold", held_for: "01:30:00", silent_for: "01:30:00" }];
+    const result = reportJson({ stuckTasks });
+    expect(result.operational.stuck).toHaveLength(1);
+    expect(result.operational.stuck[0]).toBe(stuckTasks[0]);
+
+    const many = Array.from({ length: 12 }, (_, i) => ({ task_id: `s${i}` }));
+    const capped = reportJson({ stuckTasks: many });
+    expect(capped.operational.stuck.length).toBe(10);
+    expect(capped.operational.stuck[0]).toEqual({ task_id: "s0" });
+    expect(capped.operational.stuck[9]).toEqual({ task_id: "s9" });
   });
 
   test("(6) pre-existing reportJson fields are unchanged by the operational field", () => {
