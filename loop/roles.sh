@@ -35,6 +35,14 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AINARRES=(node "$REPO/bin/ainarres.mjs")
 LOOP_LANE="dev"
+
+# The lanes an activation WORKS. The batch driver decomposes one brief and drains dev, so
+# it stays dev-only; the standing SERVICE overrides this to (dev intake) — it is the entry
+# point that must also see briefs the intaker has refined (M24/M26). Every board read in
+# driver-lib.sh iterates this set, so a lane absent here is invisible to the demand gate:
+# adding one here is what makes work on it wake the runtime at all. Always set (never
+# unset) so `"${LOOP_LANES[@]}"` is safe under `set -u` on bash 3.2.
+LOOP_LANES=(dev)
 LOOP_MODE="${LOOP_MODE:-real}"           # real | mock
 RUN_DIR="${RUN_DIR:-$REPO/loop/run}"     # per-tier sweep logs (gitignored)
 
@@ -103,7 +111,13 @@ role_features() {
         echo "lane:dev,role:designer,role:reviewer,role:integrator,capability:integrate,role:implementer,tier:2"
       fi ;;
     frontier-claude-reviewer) echo "lane:dev,role:reviewer" ;;  # M19 peer: reviews, never integrates (no capability:integrate)
-    designer) echo "lane:dev,role:designer" ;;   # one-shot brief hand-off (claude+opus peer)
+    # The designer works BOTH lanes: it decomposes dev-lane `proposed` work, and it is the
+    # role M24 D2 named for briefed→accepted — accepting a refined brief for decomposition.
+    # lane:intake is what lets it CLAIM the brief; role:intaker is deliberately absent, so
+    # the substrate itself keeps the designer out of proposed_brief (no outbound transition
+    # it is eligible for ⇒ an unrefined brief is invisible to its claim). The human/operator
+    # intaker still owns the refine step.
+    designer) echo "lane:dev,lane:intake,role:designer" ;;   # brief hand-off + standing decompose (claude+opus peer)
     oversight) echo "" ;;
     *) echo "" ;;
   esac
@@ -181,12 +195,16 @@ harness_sweep() {
       # grok: reviewer + the single integrator (+ escalated tier:2 implementer).
       GROK_BRIEF="$brief" eval "${GROK_FRONTIER_CMD:-bash \"$REPO/loop/grok-frontier.sh\"}" ;;
     designer)
-      # M19: the one-shot decomposition runs on claude+opus (design judgment).
-      CLAUDE_MODEL="${CLAUDE_DESIGNER_MODEL:-opus}" CLAUDE_BRIEF="$brief" \
+      # M19: design judgment runs on claude+opus. CLAUDE_ROLE is EXPLICIT: the wrapper used
+      # to infer its mode from CLAUDE_BRIEF being set, which silently handed the standing
+      # service's brief-less designer sweep the REVIEWER prompt (v7 M25 introduced that
+      # sweep; the inference predated it). An empty brief now means "decompose whatever is
+      # on the board", not "you are a reviewer".
+      CLAUDE_ROLE=designer CLAUDE_MODEL="${CLAUDE_DESIGNER_MODEL:-opus}" CLAUDE_BRIEF="$brief" \
         eval "${CLAUDE_FRONTIER_CMD:-bash \"$REPO/loop/claude-frontier.sh\"}" ;;
     frontier-claude-reviewer)
       # M19: the claude reviewer peer (sonnet). Reviews only; holds no capability:integrate.
-      CLAUDE_MODEL="${CLAUDE_REVIEWER_MODEL:-sonnet}" \
+      CLAUDE_ROLE=reviewer CLAUDE_MODEL="${CLAUDE_REVIEWER_MODEL:-sonnet}" \
         eval "${CLAUDE_FRONTIER_CMD:-bash \"$REPO/loop/claude-frontier.sh\"}" ;;
     *) echo "roles.sh: no real harness for poller '$poller'" >&2; return 2 ;;
   esac

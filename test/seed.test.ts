@@ -41,7 +41,7 @@ describe("seed fixture", () => {
     expect(c.lanes).toBe(1);
     expect(c.transitions).toBe(4); // 3 advance + 1 reject
     expect(c.families).toBe(2);
-    expect(c.family_features).toBe(9); // 3 for opencode+qwen, 6 for claude-code+opus (M11: integrate moved to grok+grok-build; claude-code+opus = lane:api/role:analyst/role:reviewer/capability:plan/lane:dev/role:designer)
+    expect(c.family_features).toBe(10); // 3 for opencode+qwen, 7 for claude-code+opus (M11: integrate moved to grok+grok-build; claude-code+opus = lane:api/role:analyst/role:reviewer/capability:plan/lane:dev/role:designer + lane:intake for the v8 standing designer's brief hand-off)
   });
 
   it("the dev-loop workflow has exactly one initial and one terminal stage", () => {

@@ -1,12 +1,25 @@
 #!/usr/bin/env bash
 # loop/claude-frontier.sh — ONE claude sweep (M19 federation, ADR 0021 ·
-# design/federation.md), a co-equal frontier PEER alongside grok. Two modes:
+# design/federation.md), a co-equal frontier PEER alongside grok. CLAUDE_ROLE picks the
+# mode — EXPLICITLY (roles.sh::harness_sweep sets it):
 #
-#   CLAUDE_BRIEF set   → DESIGNER-ONLY (model: opus): decompose the brief into tasks and
-#                        shepherd them to `implementing`, then stop. Same discipline as
-#                        the grok designer — it must NOT implement/review/integrate, or it
-#                        would carry the whole feature itself and starve the cheap tier.
-#   CLAUDE_BRIEF unset → REVIEWER (model: sonnet): reviewing / validating only.
+#   CLAUDE_ROLE=designer + CLAUDE_BRIEF  → ONE-SHOT DECOMPOSE (opus): turn the brief into
+#                        tasks, shepherd them to `implementing`, stop. The batch driver's
+#                        upfront pass.
+#   CLAUDE_ROLE=designer, no brief       → STANDING DESIGNER (opus): decompose whatever is
+#                        on the board — dev `proposed` work, and `briefed` intake briefs it
+#                        accepts on the intaker's behalf (M24 D2). The standing service's
+#                        per-round design pass.
+#   CLAUDE_ROLE=reviewer                 → REVIEWER (sonnet): reviewing / validating only.
+#
+# Either designer mode must NOT implement/review/integrate, or it would carry the whole
+# feature itself and starve the cheap tier.
+#
+# WHY EXPLICIT: this wrapper used to infer its mode from CLAUDE_BRIEF being set. v7 (M25)
+# then introduced a brief-LESS designer sweep in the standing service — which the
+# inference silently served the REVIEWER prompt, while the token held only
+# lane:dev,role:designer. The design pass therefore never decomposed anything. The mode is
+# now a declared input; an absent brief means "work the board", never "you are a reviewer".
 #
 # Deliberately NEVER an integrator: claude holds no capability:integrate, so an
 # `integrating` task is invisible to its claim (defense in depth — not prompt
@@ -47,8 +60,20 @@ FLAGS="${CLAUDE_FLAGS:---dangerously-skip-permissions}"
 
 # TWO mutually-exclusive modes (QUOTED heredocs so nothing expands — the token never
 # leaks into argv; claude reads it from its inherited env).
-if [ -n "${CLAUDE_BRIEF:-}" ]; then
-  PROMPT="$(cat <<'EOF'
+# Mode is a declared input, never inferred from which other variables happen to be set.
+# A direct (non-loop) invocation may omit it; we then fall back to the pre-v8 inference and
+# say so on stderr, so the legacy behaviour is visible rather than silent.
+ROLE="${CLAUDE_ROLE:-}"
+if [ -z "$ROLE" ]; then
+  if [ -n "${CLAUDE_BRIEF:-}" ]; then ROLE=designer; else ROLE=reviewer; fi
+  echo "claude-frontier: CLAUDE_ROLE unset — falling back to '$ROLE' inferred from CLAUDE_BRIEF (the loop sets it explicitly)." >&2
+fi
+
+case "$ROLE" in
+  designer)
+    if [ -n "${CLAUDE_BRIEF:-}" ]; then
+      # ── One-shot decomposition (batch driver): the brief is the whole input. ──
+      PROMPT="$(cat <<'EOF'
 You are an AINARRES DESIGNER on the `dev` lane (decomposition only this run). Your API
 token is in AINARRES_TOKEN and the base URL in AINARRES_BASE_URL (both set; do not print
 them). CLI: `node bin/ainarres.mjs <verb>` — each call prints one JSON line (ok:true, or
@@ -67,9 +92,58 @@ correct, complete result of this run. Never invent stages.
 Feature brief is at this path:
 EOF
 )"
-  PROMPT="$PROMPT $CLAUDE_BRIEF"
-else
-  PROMPT="$(cat <<'EOF'
+      PROMPT="$PROMPT $CLAUDE_BRIEF"
+    else
+      # ── Standing designer (the service's per-round design pass): the BOARD is the input. ──
+      PROMPT="$(cat <<'EOF'
+You are the AINARRES STANDING DESIGNER. Your API token is in AINARRES_TOKEN and the base
+URL in AINARRES_BASE_URL (both set; do not print them). CLI:
+`node bin/ainarres.mjs <verb>` — each call prints one JSON line (ok:true, or ok:false with
+code+reason). Read skills/ainarres-designer.md and follow it exactly.
+
+There is no brief this run: the BOARD is your input. You hold `role:designer` on two
+lanes — `dev` and `intake` — and nothing else.
+
+Run this loop until BOTH lanes return "empty", then STOP:
+  1. node bin/ainarres.mjs claim --lane intake
+  2. if a task came back, act per its stage (below), then go to 1.
+  3. node bin/ainarres.mjs claim --lane dev
+  4. if a task came back, act per its stage (below), then go to 1.
+  5. both empty -> you are done.
+
+INTAKE lane, stage `briefed` — a request a human intaker has refined. You accept it on
+their behalf, and accepting is the LAST thing you do:
+  a. Read the brief from task.payload (the request text, and `subject` if present).
+  b. CREATE the dev-lane tasks it decomposes into, each fully self-contained:
+     `node bin/ainarres.mjs create --lane dev --payload '{...}'` with goal, instructions,
+     files, a SUBSTRATE-FREE validate (e.g. `npx vitest run test/x.test.ts` — never make,
+     psql, docker, or dbmate), acceptance, and `brief_id` set to this brief's task id for
+     traceability. Use --depends-on for ordering.
+  c. ONLY THEN advance the brief: `advance <brief-id> --to accepted`. Creating first means
+     a failure mid-way leaves the brief claimable and re-doable; accepting first would
+     lose the request.
+  If the brief is too vague to decompose, do NOT guess and do NOT accept it: `block` it
+  with a reason saying what is missing. The human intaker refines it and unblocks.
+  You will never see stage `proposed_brief` — refining a raw request is the intaker's
+  step, and the substrate makes it invisible to you.
+
+DEV lane, stage `proposed` — work that needs a spec:
+  - If the payload is already a complete, implementable task spec, shepherd it:
+    `advance --to designing`, then `advance --to implementing`.
+  - If it is too coarse to implement as one task, CREATE the self-contained tasks it
+    decomposes into first, then `block` the coarse one with a reason naming them (a human
+    closes it). Never leave a coarse task sitting at `proposed` unexplained.
+
+DEV lane, stage `designing` — finish the spec and `advance --to implementing`.
+
+Do ONLY design. Do NOT implement, review, or integrate — separate worker tiers own
+`implementing`, `reviewing`, and `integrating`. Leaving dev tasks AT `implementing` is the
+correct, complete result of this run. Never invent stages. One task at a time.
+EOF
+)"
+    fi ;;
+  reviewer)
+    PROMPT="$(cat <<'EOF'
 You are an AINARRES REVIEWER on the `dev` lane, a frontier PEER (there are others; you
 are not privileged over them). Your API token is in AINARRES_TOKEN and the base URL in
 AINARRES_BASE_URL (both set; do not print them). CLI: `node bin/ainarres.mjs <verb>` —
@@ -89,8 +163,11 @@ You are NOT an integrator: you never push, open, or merge a PR — the integrato
 `integrating` and you will never be handed such a task. Never invent stages, never skip
 the task's validate. One task at a time.
 EOF
-)"
-fi
+)" ;;
+  *)
+    echo "claude-frontier: unknown CLAUDE_ROLE '$ROLE' (want designer|reviewer)" >&2
+    exit 2 ;;
+esac
 
 # Harness command guard (loop/guard-bin, 2026-07-04 board-wipe): deny make/docker/psql/
 # dbmate to the harness so a sweep can't tear down the shared substrates. Prepended, so the

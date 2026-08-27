@@ -29,9 +29,30 @@ ai() { "${AINARRES[@]}" "$@"; }
 
 # ── Board reads (all via the oversight board view — ADR 0009) ─────────────────
 
-# active+blocked counts of the lane's tasks straight from the board view. Prints "A B".
+# One merged JSON array of board rows across every lane this run works (roles.sh
+# LOOP_LANES — (dev) for the batch driver, (dev intake) for the standing service). Every
+# reader below goes through here, so a lane absent from LOOP_LANES is invisible to the
+# demand gate — which is exactly why the service adds `intake`.
+# Returns 1 if ANY lane read failed, so a caller can tell "unreachable" from "drained"
+# (the 2026-07-04 board-wipe lesson: a failed read must never look like an empty board).
+board_rows() {
+  local lane out rc=0 buf=""
+  for lane in "${LOOP_LANES[@]}"; do
+    if out="$(ai board --lane "$lane" --token "$OVERSIGHT_TOKEN" 2>/dev/null)"; then
+      buf="$buf$out
+"
+    else
+      rc=1
+    fi
+  done
+  printf '%s' "$buf" \
+    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const rows=[];for(const line of s.split("\n")){const t=line.trim();if(!t)continue;let r;try{r=JSON.parse(t)}catch{continue}if(Array.isArray(r))rows.push(...r)}process.stdout.write(JSON.stringify(rows))})'
+  return "$rc"
+}
+
+# active+blocked counts across the worked lanes, straight from the board view. Prints "A B".
 counts() {
-  ai board --lane "$LOOP_LANE" --token "$OVERSIGHT_TOKEN" 2>/dev/null \
+  board_rows \
     | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{r=[]} if(!Array.isArray(r))r=[]; const a=r.filter(x=>!x.is_terminal&&!x.blocked).length; const b=r.filter(x=>x.blocked).length; process.stdout.write(a+" "+b)})'
 }
 
@@ -42,7 +63,7 @@ counts() {
 # counts() alone reads 0 active/0 blocked for BOTH.
 board_total() {
   local out rc
-  out="$(ai board --lane "$LOOP_LANE" --token "$OVERSIGHT_TOKEN" 2>/dev/null)"; rc=$?
+  out="$(board_rows)"; rc=$?
   if [ "$rc" -ne 0 ]; then echo "0 0"; return; fi
   printf '%s' "$out" \
     | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{r=[]} if(!Array.isArray(r))r=[]; process.stdout.write(r.length+" 1")})'
@@ -53,7 +74,7 @@ board_total() {
 # service enters its `stalled` state and waits for the signature to change — a human
 # intervening — design/service.md D3).
 board_sig() {
-  ai board --lane "$LOOP_LANE" --token "$OVERSIGHT_TOKEN" 2>/dev/null \
+  board_rows \
     | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{r=[]} if(!Array.isArray(r))r=[]; process.stdout.write(r.map(x=>x.task_id+":"+x.stage+":"+(x.blocked?"b":"")).sort().join("|"))})'
 }
 
@@ -102,7 +123,7 @@ stop_active() {
 # release bumps `attempts`, which feeds M12 escalation — exactly the right effect.
 release_stranded() {
   local sub="$1" tok="$2" held
-  held="$(ai board --lane "$LOOP_LANE" --token "$OVERSIGHT_TOKEN" 2>/dev/null \
+  held="$(board_rows \
     | node -e 'let s="";const sub=process.argv[1];process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{r=[]};if(!Array.isArray(r))r=[];const t=r.find(x=>x.claimed_by===sub&&!x.is_terminal);process.stdout.write(t?t.task_id:"")})' "$sub")"
   if [ -n "$held" ]; then
     echo "  ↳ tier left $held claimed without advancing — releasing it for the next tier."

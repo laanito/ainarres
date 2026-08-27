@@ -62,10 +62,26 @@ if [ "$POLLER" = "designer" ] && [ -n "$BRIEF_FILE" ]; then
   fi
 fi
 
-# The claim→act→repeat sweep, identical in shape to every role skill's loop.
+# The lanes this poller sweeps, mirroring its real prompt: the designer works `intake`
+# (accepting briefs the human intaker refined, M24 D2) as well as `dev`; everyone else is
+# dev-only. Intake first — accepting a brief creates dev work the pool can start on in the
+# same activation. (LOOP_LANES in roles.sh is a bash array, which cannot be exported to a
+# harness, so the mapping lives here too; both are derived from the same role features.)
+case "$POLLER" in
+  designer) SWEEP_LANES="intake dev" ;;
+  *)        SWEEP_LANES="dev" ;;
+esac
+
+# The claim→act→repeat sweep, identical in shape to every role skill's loop. Restarts at
+# the first lane after every action, so accepting a brief immediately re-offers its new
+# dev tasks; stops only when every lane answers "empty" in one pass.
 while true; do
-  out="$(ai claim --lane "dev" || true)"
-  code="$(printf '%s' "$out" | jget code)"
+  out=""; code=""
+  for lane in $SWEEP_LANES; do
+    out="$(ai claim --lane "$lane" || true)"
+    code="$(printf '%s' "$out" | jget code)"
+    [ "$code" = "ok" ] && break
+  done
   [ "$code" = "ok" ] || break        # empty / already_holding / not_eligible → done sweeping
   id="$(printf '%s' "$out" | jget task.id)"
   stage="$(printf '%s' "$out" | jget task.stage_key)"
@@ -84,6 +100,16 @@ while true; do
   fi
 
   case "$POLLER:$stage" in
+    # M26 intake bridge: a `briefed` brief is decomposed into dev tasks and THEN accepted
+    # (accept last = the commit point; a failure mid-way leaves the brief re-doable). The
+    # designer never sees `proposed_brief` — refining a raw request needs role:intaker,
+    # which it does not hold, so the substrate keeps that step with the human.
+    designer:briefed)
+      n="${LOOP_MOCK_TASKS:-3}"
+      for i in $(seq 1 "$n"); do
+        ai create --lane dev --payload "$(node -e 'process.stdout.write(JSON.stringify({goal:"mock brief task #"+process.argv[2],instructions:"mock: no-op change",files:[],validate:"true",brief_id:process.argv[1],acceptance:"board drains to done"}))' "$id" "$i")" >/dev/null
+      done
+      ai advance "$id" --to accepted --note "mock: brief accepted, $n dev task(s) created" >/dev/null ;;
     designer:proposed)      ai advance "$id" --to designing   --note "mock: design start" >/dev/null ;;
     designer:designing)     ai advance "$id" --to implementing --note "mock: spec ready"  >/dev/null ;;
     nano-implementer:implementing|cheap-implementer:implementing|qwen-implementer:implementing|muse-implementer:implementing|cursor-implementer:implementing|fallback-implementer:implementing)
