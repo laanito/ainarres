@@ -23,7 +23,7 @@ the substrate and the standing service without participating in the work pipelin
   credential.
 - Oversight views, all shipped and readable by `monitor` and `oversight`: `board`, `feed`,
   `abandoned`, `timeline`, `governance_status`, `audit_flags`, `governance_actions`,
-  `spend_anomalies`, `operational_flags`, `family_track_record`, `open_briefs`.
+  `spend_anomalies`, `operational_flags`, `stuck_tasks`, `family_track_record`, `open_briefs`.
 - `api.demand` does **not** exist yet — **v7.1 (M27)**.
 - You may read the substrate directly with `psql` or PostgREST (you are outside the agent
   surface). **Read-only**: `select` only. No DDL, no `truncate`, no `make reset` / `dbmate` —
@@ -58,6 +58,15 @@ Run a monitoring pass on a regular cadence or on demand. Produce a concise repor
    - Tasks that have burned multiple attempts.
    - Any `lease_lost` events that look anomalous — `ainarres events --type lease_lost` (add
      `--family F` to attribute them).
+   - **Stuck but alive** — `api.stuck_tasks`. This is the one failure lazy reclaim cannot
+     catch (ADR 0009 assumes lease-lost ⇒ dead), so it is the one that needs a reader:
+     - `silent_hold` — holds a live lease and has reported nothing for over half its stage
+       lease. The cheap-tier spinner.
+     - `heartbeat_treadmill` — the lease has been *renewed* past its original expiry while
+       the hold outran a full lease. Alive, reporting in, going nowhere; it will never be
+       reclaimed, because the lease never lapses.
+     A row is a candidate to look at, never a verdict. Report it; the flag that makes it
+     official is `raise_operational_flag`, which is `role:auditor`-gated — a human's act.
 
 5. **Service runtime**
    - Whether the supervisor process is alive and responsive.
@@ -79,6 +88,7 @@ Status at <timestamp>
 - Unserviceable: <list or "none"> (v7.1 — not built)
 - Intake: <briefs parked in proposed_brief/briefed, or "none">
 - Blocked: <count + brief reason>
+- Stuck-alive: <task/family/kind, or "none">
 - Governance: <bans/revocations/flags or "clean">
 - Service: <alive | degraded | down> (wake method: poll <n>s)
 - Expenses: <spend anomalies | track record notes>
