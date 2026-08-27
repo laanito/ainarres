@@ -47,6 +47,13 @@ LOOP_MAX_ROUNDS="${LOOP_MAX_ROUNDS:-20}"          # per-activation safety bound 
 LOOP_POOL_SIZE="${LOOP_POOL_SIZE:-3}"             # concurrent cheap implementers per round
 LOOP_IDLE_POLL_SECS="${LOOP_IDLE_POLL_SECS:-15}"  # how often the idle service re-checks the board (D1)
 
+# The lanes THIS entry point works (roles.sh defaults to (dev) for the batch driver). The
+# standing service also works `intake`: a brief the human intaker has refined to `briefed`
+# is pending work, and every board read in driver-lib.sh iterates this set — so without
+# intake here the demand gate never sees a brief and the service idles beside it. The
+# designer tier holds lane:intake (roles.sh) and accepts briefs per M24 D2.
+LOOP_LANES=(dev intake)
+
 # The standing service DECOMPOSES continuously: unlike the batch driver (one upfront
 # designer pass on the brief), the service keeps seeing proposed dev tasks and, in v7's
 # M26, accepted intake briefs — so the designer is a standing poller that runs each round
@@ -149,7 +156,13 @@ while true; do
   ACTIVATION_COUNT=$((ACTIVATION_COUNT + 1))
   echo "→ service: activation #${ACTIVATION_COUNT} — ${active} active task(s); draining…"
   service_status running "activation #${ACTIVATION_COUNT}"
-  run_activation; act_rc=$?
+  # `run_activation || act_rc=$?`, never `run_activation; act_rc=$?`: this script runs
+  # under `set -e`, so a bare call that returns 1 (NO PROGRESS) or 2 (round cap) killed the
+  # supervisor outright instead of entering `stalled` (design/service.md D3). Nothing
+  # exercised that path until v8's intake phase drove a genuinely stuck board — a stuck
+  # task would have silently ended the standing service, with no human necessarily watching.
+  act_rc=0
+  run_activation || act_rc=$?
   case "$act_rc" in
     0)
       echo "  ✓ service: activation #${ACTIVATION_COUNT} drained — back to idle."

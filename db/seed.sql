@@ -281,10 +281,17 @@ on conflict (project_id, key) do nothing;
 --   opencode+qwen3.6 (local worker) → implementer.
 --   grok+grok-4.6 (xAI harness, M11) → integrator (holds capability:integrate;
 --     see the M11 block below).
+-- lane:intake alongside lane:dev (v8 step 1): the STANDING designer accepts a brief the
+-- human intaker has refined (briefed→accepted is role:designer's transition, M24 D2) and
+-- decomposes it into dev work. role:intaker is deliberately NOT granted — refining a raw
+-- request stays the human's step, and without it `proposed_brief` has no outbound
+-- transition the designer is eligible for, so the substrate keeps it out. This mirrors
+-- loop/roles.sh::role_features(designer); the roster record and the signed token must
+-- agree (the substrate trusts the token, ADR 0007 — this row is the provisioning truth).
 insert into app.family_features (family_id, feature_id)
 select f.id, ft.id
 from app.agent_families f
-join app.features ft on ft.name = any (array['lane:dev', 'role:designer'])
+join app.features ft on ft.name = any (array['lane:dev', 'lane:intake', 'role:designer'])
 where f.key = 'claude-code+opus'
 on conflict (family_id, feature_id) do nothing;
 

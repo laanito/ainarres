@@ -99,7 +99,12 @@ read -r SEEDED_TOTAL _ <<<"$(board_total)"
 #    concurrently (the single grok integrator IS the merge queue). Repeat until a full
 #    round moves nothing OR the board drains. (Shared with the service via run_activation.)
 echo "→ driver: pre-pool: ${LOOP_PRE_TIERS[*]:-(none)}; pool=${LOOP_POOL_SIZE}× '${LOOP_POOL_TIER}' per round; serial: ${LOOP_SERIAL_TIERS[*]}; frontier peers: ${LOOP_FRONTIER_PEERS[*]}"
-run_activation; act_rc=$?
+# `|| act_rc=$?`, never `; act_rc=$?`: under `set -e` a bare call returning 1 (no progress)
+# or 2 (round cap) killed the driver HERE — skipping the warning below and, worse, the
+# report + wipe-detection in step 3, which is the account the owner who walked away comes
+# back to. Same latent bug as loop/service.sh's; found by v8's stuck-board selftest phase.
+act_rc=0
+run_activation || act_rc=$?
 case "$act_rc" in
   1) echo "⚠ driver: a full round moved nothing — no tier can progress the board. Stopping." ;;
   2) echo "⚠ driver: hit the ${LOOP_MAX_ROUNDS}-round safety bound. Stopping." ;;
