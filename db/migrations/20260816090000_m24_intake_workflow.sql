@@ -84,6 +84,23 @@ on conflict (project_id, key) do nothing;
 -- workflow) → workflow (cascades its stages + transitions) → features (cascade any grants).
 -- Leaves the 'ainarres' project in place — it is the shared bootstrap project, restored
 -- by seed.sql, not owned by this migration.
+--
+-- The events trigger has to stand down for the cascade. app.events is append-only (ADR
+-- 0006, enforced by the events_no_update / events_no_delete triggers), and deleting a task
+-- cascades into its events —
+-- so on any substrate that has ever taken a brief, this down FAILED with "app.events is
+-- append-only (DELETE not allowed)", which `make verify-down` swallowed via its `|| break`
+-- (it then silently proved only the migrations NEWER than this one). Append-only is an
+-- invariant for AGENTS at runtime, not a bar on the schema's owner tearing its own objects
+-- down: the trigger is disabled for this statement only, inside the migration's
+-- transaction, and re-enabled immediately.
+alter table app.events disable trigger events_no_delete;
+delete from app.events
+  where task_id in (select t.id from app.tasks t
+    join app.lanes l on l.id = t.lane_id
+    where l.key = 'intake'
+      and l.workflow_id = (select id from app.workflows where key = 'ainarres-intake'));
+alter table app.events enable trigger events_no_delete;
 delete from app.tasks
   where lane_id in (select id from app.lanes where key = 'intake'
     and workflow_id = (select id from app.workflows where key = 'ainarres-intake'));

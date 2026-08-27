@@ -1,0 +1,96 @@
+Surface the STUCK-ALIVE WATCH in the END-OF-RUN REPORT: extend the report's operational
+block to name tasks that hold a LIVE lease while going nowhere — the one failure mode lazy
+reclaim can never catch, because the lease never lapses.
+
+This is the REPORT-LINE half of v8 step 1's stuck-alive watch. The read-only view it reads
+(`api.stuck_tasks`) ALREADY EXISTS ON MAIN (shipped separately). This slice ONLY renders
+those rows + wires the fetch. It applies NO consequence, touches NO auth path, adds NO DB
+migration — a PURE FORMATTER change plus a graceful fetch. It is fully SUBSTRATE-FREE to
+validate (a vitest unit test, no database).
+
+NOTE — this brief is SINGLE-USE: the run ships its task to `main`, so a re-run needs a
+fresh brief whose work isn't already on main.
+
+WHY IT MATTERS (context, not work): ADR 0009's recovery is lazy reclaim, which assumes
+lease-lost ⇒ worker dead. A worker that is ALIVE but stuck breaks that assumption: it holds
+(and may keep renewing) a live lease while the task never moves, so nothing reclaims it and
+the board looks busy. The report is where a human sees it.
+
+WHAT EXISTS TODAY (read before coding; do NOT change any of it):
+- bin/ainarres.mjs exports the PURE `formatReport({ board, timeline, trackRecord, governance,
+  auditFlags, governanceActions, spendAnomalies, operationalFlags, openBriefs }, { lane })`.
+  Its LAST section is "operational (v6 — health & spend watch):", which renders health rows
+  (from the board), spend anomalies, and operational flags, or the single line
+  "  (all clear — no health, spend, or operational-flag anomalies)" when all three are empty.
+- `reportJson(...)` mirrors the same inputs and emits an `operational: { … }` object.
+- The `report` command fetches the views and passes rows in, degrading to [] on error
+  (see the `spend_anomalies` / `operational_flags` fetches — copy that shape exactly).
+- `fmtTokens` and `fmtHeal` are the model for small pure helpers; pure-formatter tests live
+  in test/status-format.test.ts.
+- `api.stuck_tasks` — read-only, readable by oversight and monitor, ordered longest-held
+  first. Columns:
+    task_id (uuid), lane (text), stage (text), family (text, nullable),
+    attempts (int), held_for (interval), silent_for (interval), extended_by (interval),
+    stage_lease (interval), lease_expires_at (timestamptz),
+    kind (text: 'silent_hold' | 'heartbeat_treadmill')
+  IMPORTANT: PostgREST serializes intervals as STRINGS, e.g. "00:45:00", "03:20:00",
+  "1 day 02:00:00", and a negative one as "-00:30:00". Treat them as opaque strings.
+
+THE FEATURE — ONE TASK (no DB migration; the view is already on main):
+
+1. Add a PURE, TOTAL helper `fmtDuration(interval)` next to `fmtHeal`, exported for tests:
+   - "00:45:00"       -> "45m"
+   - "03:20:00"       -> "3h 20m"
+   - "1 day 02:00:00" -> "26h 0m"   (days fold into hours)
+   - "00:00:30"       -> "0m"
+   - null / undefined / unparseable -> "unknown"
+   Never throw. Minutes are truncated, not rounded.
+
+2. Extend `formatReport`'s first argument with `stuckTasks = []` (EXACTLY as
+   `operationalFlags` was added) and render it INSIDE the existing operational section,
+   AFTER the health rows and BEFORE the spend rows. One line per row, cap at the 10 rows
+   the view already ordered (longest-held first):
+     kind 'silent_hold':
+       "  - stuck: <task_id> in <stage>, held by <family> for <fmtDuration(held_for)>, silent <fmtDuration(silent_for)> (review)"
+     kind 'heartbeat_treadmill':
+       "  - stuck: <task_id> in <stage>, held by <family> for <fmtDuration(held_for)>, lease renewed +<fmtDuration(extended_by)> — alive, not progressing (review)"
+   A null `family` renders as "—" (matching the health line's convention).
+   The "(all clear …)" line must now also require `stuckTasks` to be empty.
+
+3. Mirror it in `reportJson`: add `stuck: stuckTasks.slice(0, 10)` inside the existing
+   `operational` object (rows passed through unchanged — the JSON shape stays dumb).
+
+4. Wire the `report` command to fetch `api.stuck_tasks` (unfiltered, ordered as the view
+   returns it — no `order=` param needed) and pass it in as `stuckTasks`. Degrade to [] if
+   the view is absent or the request errors: a substrate without the view must still produce
+   a full report.
+
+ACCEPTANCE — add assertions to test/status-format.test.ts (the PURE formatReport suite).
+They must FAIL on current main (no stuck rendering, no fmtDuration) and PASS after:
+- fmtDuration covers each case in step 1, including null -> "unknown".
+- Given `stuckTasks: [{ task_id: 't1', stage: 'implementing', family: 'opencode+big-pickle',
+  kind: 'silent_hold', held_for: '01:30:00', silent_for: '01:30:00' }]`, formatReport prints a
+  line containing "stuck: t1 in implementing", "held by opencode+big-pickle for 1h 30m", and
+  "silent 1h 30m".
+- Given a `kind: 'heartbeat_treadmill'` row with `extended_by: '02:00:00'`, the line contains
+  "lease renewed +2h 0m" and "alive, not progressing".
+- A row with `family: null` renders "held by —".
+- With `stuckTasks` non-empty, the operational section does NOT print the "(all clear …)"
+  line; with all four inputs empty it still does.
+- More than 10 stuck rows renders exactly 10 lines.
+- formatReport({}) still renders every existing section and does not throw.
+- reportJson({ stuckTasks: [{ task_id: 't1' }] }).operational.stuck has length 1.
+
+VALIDATE (substrate-free — the ONLY validate; needs NO database, NO docker, NO make, NO psql.
+Run it verbatim; it must fail on main and pass after your change):
+    npx vitest run test/status-format.test.ts
+
+CONSTRAINTS:
+- No DB migration. No new view. Do NOT modify api.stuck_tasks or any view.
+- Keep `formatReport`, `reportJson`, and `fmtDuration` pure and total (no fetching, no clock,
+  never throw on empty or partial input) — the `report` command does the fetch and passes
+  rows in. Mirror the `operationalFlags` wiring precisely.
+- A stuck row is a CANDIDATE for a human to look at, never a verdict: tag it "(review)",
+  never "ban", and never compute a consequence. The flag that makes it official is
+  api.raise_operational_flag, which is role:auditor-gated — a human's act.
+- JavaScript only (bin/ainarres.mjs is ESM); tests are vitest in test/status-format.test.ts.
