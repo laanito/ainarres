@@ -44,7 +44,7 @@ reset: down up seed test
 ## against a live stack (`make up` first); it leaves the schema fully migrated.
 verify-down:
 	@echo "rolling all migrations down…"
-	@for i in $$(seq 1 20); do \
+	@for i in $$(seq 1 40); do \
 	  $(COMPOSE) run --rm migrate --no-dump-schema down >/dev/null 2>&1 || break; \
 	done
 	@echo "re-applying all migrations…"

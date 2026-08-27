@@ -9,9 +9,21 @@ the substrate and the standing service without participating in the work pipelin
 - You have the `ainarres` CLI (`node bin/ainarres.mjs`). `set -a; source loop.env; set +a` points
   it at the loop substrate (`AINARRES_BASE_URL=http://localhost:3011`); `3010` is the test
   substrate.
-- Oversight views, all shipped and granted to the `oversight` role: `board`, `feed`, `abandoned`,
-  `timeline`, `governance_status`, `audit_flags`, `governance_actions`, `spend_anomalies`,
-  `operational_flags`, `family_track_record`, `open_briefs`.
+- Mint a **read-only** token — the `monitor` role, not `oversight`:
+
+  ```bash
+  node bin/ainarres.mjs token --family <your-family> --role monitor --features '' \
+    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).token))'
+  ```
+
+  `monitor` reads every oversight view and the raw `app` tables, and can call **nothing** — no
+  governance RPC, no verb, no flag. Use `oversight` only if you are the owner doing an
+  intervention (`skills/ainarres-operator-intervene.md`): that role carries `EXECUTE` on
+  `api.set_permanent_ban` and `api.lift_ban`, so an oversight token is **not** a read-only
+  credential.
+- Oversight views, all shipped and readable by `monitor` and `oversight`: `board`, `feed`,
+  `abandoned`, `timeline`, `governance_status`, `audit_flags`, `governance_actions`,
+  `spend_anomalies`, `operational_flags`, `family_track_record`, `open_briefs`.
 - `api.demand` does **not** exist yet — **v7.1 (M27)**.
 - You may read the substrate directly with `psql` or PostgREST (you are outside the agent
   surface). **Read-only**: `select` only. No DDL, no `truncate`, no `make reset` / `dbmate` —
@@ -84,3 +96,16 @@ flag it clearly at the end under **Action required**.
 - Monitoring is read-heavy. Prefer views over raw tables.
 - Report facts, not speculation. If you cannot determine something, say so.
 - Do not optimise or "help" the swarm by doing its work. Your job is visibility.
+
+## If you are a delegated monitor (an agent in this seat)
+
+Read and report; recommend in words. Every write belongs to the human who delegated to you —
+seating changes, bans and lifts, forced releases, working a brief. This is enforced by grant, not
+by trust: a `monitor` token is refused by PostgREST on any RPC, so a call you should not make
+fails rather than lands (`test/monitor-role.test.ts`). If a report needs an action, say so under
+**Action required** and stop there.
+
+Recommending a **permanent ban** is a special case worth naming: the substrate already computes
+that recommendation (`api.governance_status.recommend_ban_count`, M22 D5) and surfaces it in
+`ainarres report`. Relay it; never act on it. Permanent denial is human-only by design
+([ADR 0028](../.agents/decisions/0028-v8-scope-the-agent-operator-seat.md), M22 D4).
