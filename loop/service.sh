@@ -105,6 +105,10 @@ trap 'on_exit' EXIT
 echo "→ service: loop substrate = ${AINARRES_BASE_URL} (mode=$LOOP_MODE)"
 echo "→ service: standing supervisor up (poll ${LOOP_IDLE_POLL_SECS}s; design: ${LOOP_DESIGN_TIERS[*]}; pool=${LOOP_POOL_SIZE}× '${LOOP_POOL_TIER}'; serial: ${LOOP_SERIAL_TIERS[*]}; frontier: ${LOOP_FRONTIER_PEERS[*]}; consume-governance=${LOOP_CONSUME_GOVERNANCE})"
 echo "→ service: status file = ${SERVICE_STATUS_FILE}  ·  stop with: make service-stop (or SIGTERM)"
+
+# M27 (ADR 0026 D2): probe each configured tier's backend once, up front. "Configured" is not
+# "available" — a tier whose model was retired upstream must not be spawned into all day.
+build_capability_map
 service_status starting "supervisor up"
 
 # STALLED_SIG holds the board signature of a stuck board (set after a no-progress
@@ -138,6 +142,21 @@ while true; do
   if [ "$active" -eq 0 ]; then
     STALLED_SIG=""
     service_status idle "$([ "$blocked" -gt 0 ] && echo "board drained; ${blocked} blocked awaiting a human" || echo "board drained")"
+    sleep "$LOOP_IDLE_POLL_SECS" || true
+    continue
+  fi
+
+  # M27 (design D3): active work exists — but can anything we run actually serve it? Read
+  # demand in capability terms and match it against the LIVE capability map. If nothing can,
+  # say so precisely (which capability, and whether it is unseated or merely unreachable) and
+  # HOLD: no fleet-spawn to discover what the substrate already told us. This is predictive,
+  # and it is what narrows `stalled` to its real meaning — "a live, capable family kept
+  # failing this task", rather than "nobody could ever have done it".
+  refresh_capability_map
+  refresh_demand
+  compute_unserviceable
+  if [ -n "$DEMAND" ] && ! has_serviceable_demand; then
+    service_status idle "$(unserviceable_summary)"
     sleep "$LOOP_IDLE_POLL_SECS" || true
     continue
   fi
@@ -178,7 +197,7 @@ while true; do
       else
         echo "⚠ service: activation #${ACTIVATION_COUNT} hit the ${LOOP_MAX_ROUNDS}-round cap without draining — board stuck. Holding stalled, awaiting a human." >&2
       fi
-      read -r active blocked <<<"$(counts)"; LAST_ACTIVE="$active"; LAST_BLOCKED="$blocked"
+      board_refresh; read -r active blocked <<<"$(counts)"; LAST_ACTIVE="$active"; LAST_BLOCKED="$blocked"
       service_status stalled "board stuck after activation #${ACTIVATION_COUNT}: ${active} active make no progress — awaiting a human"
       ;;
     3)

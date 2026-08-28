@@ -99,6 +99,13 @@ LOOP_PRE_TIERS=()
 # one-shot designer (below) is a claude+opus peer; grok stays co-eligible for design.
 LOOP_FRONTIER_PEERS=(frontier frontier-claude-reviewer)
 
+# M27 (v7.1) — capabilities that are UNSEATED ON PURPOSE, because a person holds them.
+# `role:intaker` refines a raw request (M24 D5 / ADR 0028: the substrate keeps that step with
+# a human by giving no worker the feature); `role:auditor` raises the qualitative flag (M22
+# D6). Demand for these is NOT "seat a family" — it is "this is waiting for you", and the
+# service says so rather than advising a seat that must not exist.
+LOOP_HUMAN_FEATURES=(role:intaker role:auditor)
+
 # Token features per poller. The substrate trusts the signed token's features
 # (minus denials) — ADR 0007 — so this is the authoritative capability grant for
 # the run. In mock mode the frontier drops implementer/tier:2 (see header).
@@ -213,6 +220,59 @@ harness_sweep() {
       CLAUDE_ROLE=reviewer CLAUDE_MODEL="${CLAUDE_REVIEWER_MODEL:-sonnet}" \
         eval "${CLAUDE_FRONTIER_CMD:-bash \"$REPO/loop/claude-frontier.sh\"}" ;;
     *) echo "roles.sh: no real harness for poller '$poller'" >&2; return 2 ;;
+  esac
+}
+
+# M27 (v7.1 / ADR 0026 D2) — is this tier's BACKEND reachable? "Configured" is not
+# "available": the v7 service kept spawning a tier whose model had been retired upstream
+# (qwen3-coder-next, HTTP 410 on every activation for six weeks), paying a process start and
+# a worktree for a backend that could never answer.
+#
+# Deliberately CHEAP and honest: it checks that the harness binary resolves, and for the
+# ollama-backed opencode tiers that the local ollama endpoint answers. It does NOT call a
+# model — a probe that spends tokens to find out whether it can spend tokens is a bad trade,
+# and a retired CLOUD model is caught the other way: a sweep that exits non-zero marks the
+# tier down (driver-lib::mark_tier_down) until the next re-probe.
+#
+# Returns 0 = live, 1 = down. UNKNOWN counts as LIVE (the design's rule: never wrongly
+# withhold a tier — an outage in the optimization must change cost, never correctness).
+tier_probe() {
+  local tier="$1"
+  [ "$LOOP_MODE" = "mock" ] && return 0        # the mock harness is always reachable
+  case "$tier" in
+    *-implementer)
+      # opencode wrapper tiers. Binary first, then the local ollama endpoint for the
+      # ollama/* models (a stopped ollama is the common local outage).
+      command -v "${OPENCODE_BIN:-opencode}" >/dev/null 2>&1 || return 1
+      case "$(harness_model_for "$tier")" in
+        ollama/*)
+          curl -fsS --max-time 2 "${OLLAMA_HOST:-http://127.0.0.1:11434}/api/tags" >/dev/null 2>&1 || return 1 ;;
+      esac
+      ;;
+    cursor-implementer)
+      command -v "${CURSOR_BIN:-cursor-agent}" >/dev/null 2>&1 || return 1 ;;
+    frontier)
+      command -v "${GROK_BIN:-grok}" >/dev/null 2>&1 || return 1 ;;
+    designer|frontier-claude-reviewer)
+      # Same resolution order claude-frontier.sh uses.
+      [ -n "${CLAUDE_BIN:-}" ] && [ -x "${CLAUDE_BIN}" ] && return 0
+      command -v claude >/dev/null 2>&1 && return 0
+      [ -x "$HOME/.claude/local/claude" ] && return 0
+      [ -x "$HOME/.claude/bin/claude" ] && return 0
+      return 1 ;;
+  esac
+  return 0
+}
+
+# The model a tier runs, for the probe above (mirrors harness_sweep's defaults).
+harness_model_for() {
+  case "$1" in
+    nano-implementer)     echo "${OPENCODE_NANO_MODEL:-ollama/nemotron-3-nano:30b-cloud}" ;;
+    cheap-implementer)    echo "${OPENCODE_PRIMARY_MODEL:-opencode/big-pickle}" ;;
+    qwen-implementer)     echo "${OPENCODE_QWEN_MODEL:-ollama/qwen3-coder-next:cloud}" ;;
+    muse-implementer)     echo "${OPENCODE_MUSE_MODEL:-ollama/muse-glimmer:30b-mlx}" ;;
+    fallback-implementer) echo "${OPENCODE_FALLBACK_MODEL:-openrouter/nvidia/nemotron-3-ultra-550b-a55b:free}" ;;
+    *)                    echo "" ;;
   esac
 }
 

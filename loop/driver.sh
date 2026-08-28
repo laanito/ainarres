@@ -98,7 +98,9 @@ read -r SEEDED_TOTAL _ <<<"$(board_total)"
 #    implementer (throughput), then the serial tiers once each, then the frontier peers
 #    concurrently (the single grok integrator IS the merge queue). Repeat until a full
 #    round moves nothing OR the board drains. (Shared with the service via run_activation.)
-echo "→ driver: pre-pool: ${LOOP_PRE_TIERS[*]:-(none)}; pool=${LOOP_POOL_SIZE}× '${LOOP_POOL_TIER}' per round; serial: ${LOOP_SERIAL_TIERS[*]}; frontier peers: ${LOOP_FRONTIER_PEERS[*]}"
+echo "→ driver: pre-pool: ${LOOP_PRE_TIERS[*]:-(none)}; pool≤${LOOP_POOL_SIZE}× '${LOOP_POOL_TIER}' per round; serial: ${LOOP_SERIAL_TIERS[*]}; frontier peers: ${LOOP_FRONTIER_PEERS[*]}"
+# M27: probe backends once, then each round spawns only the tiers pending work needs.
+build_capability_map
 # `|| act_rc=$?`, never `; act_rc=$?`: under `set -e` a bare call returning 1 (no progress)
 # or 2 (round cap) killed the driver HERE — skipping the warning below and, worse, the
 # report + wipe-detection in step 3, which is the account the owner who walked away comes
