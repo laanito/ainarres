@@ -20,6 +20,7 @@ describe("domain tables", () => {
     "governance_strikes",
     "lanes",
     "operational_flags",
+    "operator_actions",
     "projects",
     "stages",
     "tasks",

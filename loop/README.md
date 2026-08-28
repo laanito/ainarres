@@ -163,7 +163,7 @@ make intake-serve                               # loopback:3020, targets the loo
 # submit a request (reads the key file; --file PATH or --file - also work):
 ainarres intake --request "add a foo widget"
 #   → brief 01a0…  stage=proposed_brief
-ainarres refine <brief-id>                      # the human intaker's step → briefed
+ainarres refine <brief-id>                      # the intaker's step → briefed
 ```
 
 **The key needs no ceremony (v8).** The channel establishes its own: `INTAKE_PSK` if you set
@@ -182,6 +182,36 @@ a written widening contract in ADR 0025). **Defence in depth:** the PSK is the o
 brief but the substrate refuses it any dev create or merge, so a channel bug can't grant what
 the substrate withholds. Verified by `test/intake-channel.test.ts` (real server + real
 `create_task`).
+
+## The operator seat (v8, ADR 0028)
+
+The operator is an **identity**, not "whoever holds `JWT_SECRET`". `agent+operator` is a
+registered family (`db/seed.sql`) holding `lane:intake` + `role:intaker` + `lane:dev` +
+`role:designer` + `role:operator` — enough to work the intake middle and create the dev work,
+and no more: **no `capability:integrate`** (it can never merge) and **no `role:auditor`** (the
+auditor stays human, and stays a different identity). `ainarres refine` runs as the seat, so
+the `claimed` / `transition` events name the operator rather than the channel's human caller.
+
+Before this, operator work was minted as whichever worker family the act happened to need, so
+the operator's work — and its mistakes — landed in that worker's history and, through M20, in
+its track record. The substrate was measuring the wrong family.
+
+```sh
+ainarres operator-log --action service_start --target "the standing service"
+ainarres operator-log --action refine --task <id> --outcome refused --reason "advance refused"
+ainarres operator-actions --limit 20 --token "$OV"     # oversight or monitor
+```
+
+`app.operator_actions` is append-only and exists for the acts that **cannot** be events:
+`app.events.task_id` is `NOT NULL`, so starting the service or reseating a tier has nowhere
+else to go (the same reconciliation M22 D7 made for human ban/lift). It is written *by the
+seat*, so it is a good-faith trail, not proof — everything task-shaped is independently in
+`app.events` under `agent+operator`, and that stays the harder record. Read them together.
+
+**What step 2 does not buy.** `api.effective_features()` trusts the signed token minus denials
+(ADR 0007) — it does not re-check `app.family_features`. So the seat is *named and ledgered*,
+not yet *bounded*: a holder of `JWT_SECRET` can still mint anything. Closing that is the
+credential-envelope step. See the amendment in ADR 0028.
 
 ## Run it for real (owner-invoked)
 

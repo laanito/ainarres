@@ -24,7 +24,11 @@ the substrate and the standing service without participating in the work pipelin
 - Oversight views, all shipped and readable by `monitor` and `oversight`: `board`, `feed`,
   `abandoned`, `timeline`, `governance_status`, `audit_flags`, `governance_actions`,
   `spend_anomalies`, `operational_flags`, `stuck_tasks`, `family_track_record`, `open_briefs`.
-- `api.demand` is live (M27 Slice A) and readable by `monitor`.
+- `api.demand` is live (M27 Slice A) and readable by `monitor`; the service consumes it to
+  spawn only the tiers the waiting work needs (M27 Slice B, shipped).
+- `api.operator_actions` — the operator seat's own ledger (v8 / ADR 0028), readable by
+  `monitor`. This is where you read **what the operator did**, including its refused and
+  failed acts.
 - You may read the substrate directly with `psql` or PostgREST (you are outside the agent
   surface). **Read-only**: `select` only. No DDL, no `truncate`, no `make reset` / `dbmate` —
   see the 2026-07-04 board wipe.
@@ -36,13 +40,23 @@ Run a monitoring pass on a regular cadence or on demand. Produce a concise repor
 1. **Demand and service behaviour**
    - Current `api.demand` — which capability bundles have pending claimable work, and how many
      tasks each. A bundle is what a family must hold to move such a task, so a bundle no seated
-     family satisfies is work nothing you run can do: report it as **Action required — seat a
-     family holding {bundle}**. (The service's own use of this to spawn only the needed tiers is
-     M27 Slice B.)
+     family satisfies is work nothing you run can do. The service already spawns only the tiers
+     a live bundle needs (M27 Slice B, shipped).
    - Whether the standing service is waking on push notifications or falling back to poll —
-     **v7.1 (M28) — not yet built**. Today it always polls (`LOOP_IDLE_POLL_SECS`, default 15s).
-   - Any `unserviceable-demand` signals and their cause (no configured family vs. backend down) —
-     **v7.1 dependent**.
+     **push-wake (ADR 0027) is designed, not built**. Today it always polls
+     (`LOOP_IDLE_POLL_SECS`, default 15s).
+   - Any unserviceable-demand warnings. The service logs these to stderr as
+     `⚠ <cause>: N task(s) need {bundle} — <why>`, only when the condition CHANGES, and there
+     are **three** causes — read the cause, it decides your recommendation:
+     - `unserviceable — no configured family provides it; seat one` → **Action required —
+       seat a family holding {bundle}**.
+     - `unserviceable — the family that provides it is unreachable (<tier> is down)` → the
+       seating is fine; the backend is down. Report the tier, not a seating change.
+     - `awaiting a human — this capability is human-held by design` → **not** a seating gap.
+       `role:intaker` and `role:auditor` are unseated on purpose (`loop/roles.sh::
+       LOOP_HUMAN_FEATURES`). Recommending "seat a family" here is recommending the human
+       boundary be dismantled. Report it as work waiting on a person, and say which person-act
+       it waits for (usually: a brief needs refining).
 
 2. **Pipeline health**
    - Tasks in `blocked` state and why.
@@ -78,8 +92,22 @@ Run a monitoring pass on a regular cadence or on demand. Produce a concise repor
 6. **Expense / token health** (cost-control monitoring)
    - Shipped today: `api.spend_anomalies`, `api.family_track_record`, and `ainarres report` for
      track-record and per-family activity. An unmeasured family reads as `unknown`, never `free`.
-   - No-op activations, unserviceable demand, and over-spawning detection depend on `api.demand`
-     and demand-shaped scaling (M27/M28) — **not yet on main**. Treat that half as aspirational.
+   - Demand-shaped scaling is live (M27): the service no longer wakes every tier on every
+     activation, so a spawn without matching demand is now a bug worth reporting.
+
+7. **The operator's own record** (v8 / ADR 0028)
+   - `ainarres operator-actions --limit 20` — what the seat did, newest first, including
+     `outcome: refused | failed`. `ainarres report` renders the same as an "operator" section.
+   - The seat is a family like any other, so it appears in `api.family_track_record` and can be
+     struck and temp-banned by M21. Report the operator's misses the way you would a worker's.
+   - Read it **next to** the events. The ledger is written by the seat itself, so it is a
+     good-faith trail, not proof: a seat that omits a write leaves no row. Everything
+     task-shaped is independently in `app.events` under `agent+operator`
+     (`ainarres events --family agent+operator`), and that record is the harder one. A gap
+     between the two — events with no ledger line — is itself worth reporting.
+   - Watch for the seat acting under a *worker's* name. Two interventions legitimately require
+     it (releasing another agent's stranded claim; the driver's own lane acts); anything else
+     is the attribution problem v8 exists to fix.
 
 ## Output format
 
@@ -88,11 +116,12 @@ Return a short, structured status:
 ```
 Status at <timestamp>
 - Demand: <bundles with pending counts, or "none">
-- Unserviceable: <list or "none"> (v7.1 — not built)
+- Unserviceable: <bundle + cause, or "none">  (distinguish: seat one / backend down / awaiting a human)
 - Intake: <briefs parked in proposed_brief/briefed, or "none">
 - Blocked: <count + brief reason>
 - Stuck-alive: <task/family/kind, or "none">
 - Governance: <bans/revocations/flags or "clean">
+- Operator: <N actions, M refused/failed, or "none">
 - Service: <alive | degraded | down> (wake method: poll <n>s)
 - Expenses: <spend anomalies | track record notes>
 ```

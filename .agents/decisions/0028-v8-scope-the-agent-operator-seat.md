@@ -120,7 +120,9 @@ What the seat holds:
 - **The intake middle** — claim, refine, and advance briefs on the `intake` lane, and create the
   resulting `dev` work through the unchanged M24/D4 two-tier gate.
 - **Unstick work** — forced release of a stranded claim (as `driver-lib.sh::release_stranded` does),
-  unblock, and the audit/operational flags it is already granted.
+  and unblock. **Not** the audit or operational flags: both are `role:auditor`-gated (M22 D6,
+  M23 D1), and the next section says the seat may not hold that role. Corrected during the
+  step-2 build; the earlier draft of this bullet contradicted the section below it.
 - **Service lifecycle and seating** — start, stop, and reconfigure the standing service; add or
   remove families from the seated roster, within the envelope.
 
@@ -131,6 +133,34 @@ What the seat must **never** hold:
 - `role:auditor` — the auditor is the **human's** seat (below).
 - The signing key, or any power to mint outside its envelope.
 - `set_permanent_ban` / `lift_ban`.
+
+### Amendment (found building step 2, 2026-08-28): what the seat identity does and does not buy
+
+The seat is now built (`agent+operator` in `db/seed.sql`, `role:operator`, `app.operator_actions`,
+`api.record_operator_action`, `api.operator_actions`). Two things the build settled that this ADR
+should not leave a reader to over-read:
+
+**1. Step 2 buys ATTRIBUTION, not CONTAINMENT.** `api.effective_features()` reads the *signed
+token's* features and subtracts active denials — it does **not** re-intersect against
+`app.family_features`. That is [0007](0007-auth-identity-family-grant-deny.md) working as designed:
+the substrate trusts the token, and provisioning is enforced when the token is *minted*. So the
+`role:operator` gate stops an unregistered family, a token that never claimed the feature, and a
+seat whose feature governance has denied — and it stops nothing at all about a holder of
+`JWT_SECRET`, because nothing inside the database can. **The seat's boundary is only as real as the
+credential envelope**, which is the *next* step, not this one. Until then the seat is an honest
+name for the operator's acts, not a wall around them.
+
+**2. The seat is claim-eligible for `proposed → designing`, and that is a known widening.** The M24
+D4 create-gate is data-driven — creating in a lane requires the starter role of that lane's initial
+stage — and it reads the *same* features the claim path reads. So `lane:dev` + `role:designer`, the
+minimum that can create dev work at all, also makes the seat eligible to claim dev design work.
+Nothing pushes work to it (the seat is not a tier and runs no poller), and an actual claim would
+carry its own name in `app.events`. Narrowing it means short-TTL, per-act credentials — again the
+envelope step. Recorded here rather than hidden, because a reader comparing the seed to the
+prohibition list will otherwise find it themselves and wonder what else was glossed.
+
+Neither changes the decision. Both change what "step 2 is done" is allowed to mean: the seat is
+*named and ledgered*, and it is *not yet bounded*.
 
 ### The auditor stays human, and the operator may not be the auditor
 

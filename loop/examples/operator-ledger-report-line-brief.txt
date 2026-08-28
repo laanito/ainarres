@@ -1,0 +1,113 @@
+Surface the OPERATOR'S OWN ACTIONS in the END-OF-RUN REPORT: a new section naming what the
+agent operator seat did — including the acts that were refused or failed, which are the
+operator's own misses and must be visible as such.
+
+This is the REPORT-LINE half of v8 step 2's operator seat. The read-only view it reads
+(`api.operator_actions`) ALREADY EXISTS ON MAIN (shipped separately, with the ledger table
+and the write verb). This slice ONLY renders those rows + wires the fetch. It applies NO
+consequence, touches NO auth path, adds NO DB migration — a PURE FORMATTER change plus a
+graceful fetch. It is fully SUBSTRATE-FREE to validate (a vitest unit test, no database).
+
+NOTE — this brief is SINGLE-USE: the run ships its task to `main`, so a re-run needs a
+fresh brief whose work isn't already on main.
+
+WHY IT MATTERS (context, not work): until v8, "the operator" was not an identity — it was
+whoever held the signing key, minting as whichever worker family the act happened to need.
+Operator work landed in a worker's history and, through M20, in that worker's track record.
+The seat is now its own family (`agent+operator`), and its instance-scoped acts — starting
+the service, reconfiguring a tier — have no task, so they cannot be events (app.events.task_id
+is NOT NULL). They live in their own append-only ledger. The report is where a human reads
+what the seat did without going to the database.
+
+WHAT EXISTS TODAY (read before coding; do NOT change any of it):
+- bin/ainarres.mjs exports the PURE `formatReport({ board, timeline, trackRecord, governance,
+  auditFlags, governanceActions, spendAnomalies, operationalFlags, openBriefs, stuckTasks },
+  { lane })`. Its LAST section is "operational (v6 — health & spend watch):".
+- `reportJson(...)` mirrors the same inputs and emits `operational: { … }`.
+- The `report` command fetches the views and passes rows in, degrading to [] on error
+  (see the `stuck_tasks` / `operational_flags` fetches — copy that shape exactly).
+- `fmtTokens`, `fmtHeal` and `fmtDuration` are the model for small pure helpers;
+  pure-formatter tests live in test/status-format.test.ts.
+- The governance section already renders `governanceActions` (the human ban/lift trail) as
+  its own capped list — the closest existing shape to this one.
+- `api.operator_actions` — read-only, readable by oversight and monitor, NEWEST FIRST.
+  Columns:
+    family (text), action (text, a lower_snake slug like 'refine' or 'service_start'),
+    target (text, nullable — free text naming what was acted on),
+    task_id (uuid, NULLABLE — null for the instance-scoped acts),
+    outcome (text: 'ok' | 'refused' | 'failed'),
+    reason (text, nullable — why it was refused/failed),
+    detail (jsonb object), actor_sub (uuid), created_at (timestamptz)
+
+THE FEATURE — ONE TASK (no DB migration; the view is already on main):
+
+1. Extend `formatReport`'s first argument with `operatorActions = []` (EXACTLY as
+   `stuckTasks` was added) and render a NEW section titled
+
+     "operator (v8 — what the seat did):"
+
+   placed AFTER the whole governance section and BEFORE the "operational (v6 …)" section.
+
+2. Section body, from the rows in the order the view returned them (newest first — do NOT
+   re-sort), capped at 10:
+   - Empty input renders exactly one line: "  (no operator actions)".
+   - Otherwise, a COUNT line first:
+       "  <N> action(s) · <M> refused/failed"
+     where N is the total number of rows PASSED IN (before the cap) and M is how many of
+     those have outcome 'refused' or 'failed'. Use the literal word "action(s)".
+   - Then one line per row (max 10):
+       outcome 'ok':
+         "  - <family> <action> <targetPart>"
+       outcome 'refused' or 'failed':
+         "  - <family> <action> <targetPart> — <outcome>: <reason or "no reason given">"
+     where <targetPart> is:
+       - `→ <target>`         when target is a non-empty string
+       - `→ task <task_id>`   when target is null/empty but task_id is present
+       - `(instance)`         when both are absent — the acts that cannot be events
+     A null/empty `family` renders as "—" (matching the health line's convention).
+
+3. Mirror it in `reportJson`: add a top-level `operator: { total, failed, actions }` where
+   `total` is the pre-cap row count, `failed` counts 'refused' + 'failed', and `actions` is
+   `operatorActions.slice(0, 10)` passed through unchanged (the JSON shape stays dumb).
+
+4. Wire the `report` command to fetch `api.operator_actions` (use `?limit=25`, the view is
+   already ordered newest-first — no `order=` param) and pass the rows in as
+   `operatorActions`. Degrade to [] if the view is absent or the request errors: a substrate
+   without the view must still produce a full report.
+
+ACCEPTANCE — add assertions to test/status-format.test.ts (the PURE formatReport suite).
+They must FAIL on current main (no operator section) and PASS after:
+- formatReport({}) contains "operator (v8 — what the seat did):" followed by
+  "  (no operator actions)", and still renders every existing section without throwing.
+- Given one row `{ family: 'agent+operator', action: 'refine', target: null,
+  task_id: 't1', outcome: 'ok' }`, the section contains
+  "- agent+operator refine → task t1" and the count line "1 action(s) · 0 refused/failed".
+- Given `{ family: 'agent+operator', action: 'service_start', target: 'the standing service',
+  outcome: 'ok' }`, the line contains "service_start → the standing service".
+- Given `{ family: 'agent+operator', action: 'service_start', target: null, task_id: null,
+  outcome: 'ok' }`, the line contains "service_start (instance)".
+- Given `{ family: 'agent+operator', action: 'refine', task_id: 't2', outcome: 'refused',
+  reason: 'advance to briefed was refused' }`, the line contains
+  "— refused: advance to briefed was refused", and the count line reads "1 refused/failed".
+- A 'failed' row with `reason: null` renders "— failed: no reason given".
+- A row with `family: null` renders "- — <action>".
+- 12 rows render exactly 10 detail lines, and the count line still says "12 action(s)".
+- reportJson({ operatorActions: [{ family: 'agent+operator', action: 'refine',
+  outcome: 'failed' }] }).operator equals { total: 1, failed: 1, actions: [ …the one row… ] }.
+- reportJson({}).operator equals { total: 0, failed: 0, actions: [] }.
+
+VALIDATE (substrate-free — the ONLY validate; needs NO database, NO docker, NO make, NO psql.
+Run it verbatim; it must fail on main and pass after your change):
+    npx vitest run test/status-format.test.ts
+
+CONSTRAINTS:
+- No DB migration. No new view. Do NOT modify api.operator_actions or any view, and do NOT
+  touch api.record_operator_action or anything under db/.
+- Keep `formatReport` and `reportJson` pure and total (no fetching, no clock, never throw on
+  empty or partial input) — the `report` command does the fetch and passes rows in. Mirror
+  the `stuckTasks` wiring precisely.
+- The ledger is a RECORD, never a verdict. Render what the seat reported and nothing more:
+  no scoring, no ban recommendation, no "the operator is failing" judgement. A refused act is
+  shown with its reason and left there.
+- Do NOT re-sort, re-group, or de-duplicate the rows; the view's order is the contract.
+- JavaScript only (bin/ainarres.mjs is ESM); tests are vitest in test/status-format.test.ts.

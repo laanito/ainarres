@@ -476,6 +476,58 @@ join app.features ft on ft.name = any (array['lane:intake', 'role:intaker'])
 where f.key = 'human+intaker'
 on conflict (family_id, feature_id) do nothing;
 
+-- ── v8 / ADR 0028: the agent operator seat ───────────────────────────────────
+-- The operator is now an IDENTITY, not "whoever holds JWT_SECRET". Before this, an
+-- operator act was minted as whichever family the act happened to need — human+intaker
+-- to refine a brief, claude-code+opus to create the dev work — so the operator's work
+-- and the operator's mistakes landed in a WORKER's history and, through M20, in that
+-- worker's track record. A seated family fixes attribution at the source: every
+-- operator act now carries `agent+operator` in app.events and scores the operator.
+--
+-- What it holds, and why each one:
+--   lane:intake + role:intaker  — work the intake middle (claim a proposed brief,
+--        refine it, advance it) without impersonating the channel's human caller.
+--   lane:dev + role:designer    — turn an accepted brief into dev work. The M24 D4
+--        create-gate is data-driven: creating in a lane requires the starter role of
+--        that lane's initial stage, so this pair is the minimum that can create dev
+--        work at all. It is NOT relaxed for the seat; the seat satisfies it like
+--        anyone else.
+--   role:operator               — the seat marker (v8). Gates api.record_operator_action
+--        and nothing else: it lets the seat SAY what it did, never do more.
+--
+-- What it does NOT hold, deliberately — each one a done-test in test/operator-seat.test.ts:
+--   capability:integrate — the seat can never merge. The single independent grok
+--        integrator stays the only family that can (ADR 0015/0017, M19 D1/D5).
+--   role:auditor         — ADR 0028: the auditor seat and the operator seat must be
+--        DISTINCT identities, and the auditor stays human. An operator that could flag
+--        its own gaps is the oversight loop closing on itself.
+--   role:implementer / role:reviewer / tier:2 — the seat operates the machine; it is
+--        not a worker in it, and must not be able to claim delivery work.
+--
+-- KNOWN WIDENING, recorded rather than hidden: because the D4 create-gate and the
+-- claim gate read the SAME features, holding lane:dev + role:designer also makes the
+-- seat claim-ELIGIBLE for `proposed → designing`. Nothing pushes work to it (the seat
+-- is not a loop tier and runs no poller), and if it ever did claim, the event would
+-- carry its own name. Narrowing this — short-TTL, per-act credentials — is the v8
+-- credential-envelope step, not a seed change.
+--
+-- Placement is out-of-band, exactly like every other family: registration here plus an
+-- owner-minted token. A family must be registered to be usable at all ("unknown family"
+-- ⇒ not_eligible, ADR 0007).
+insert into app.agent_families (key, description) values
+  ('agent+operator', 'the agent operator seat (ADR 0028) — works the intake middle and creates dev work under its own name; NOT a worker (no role:implementer/reviewer), NOT the auditor (no role:auditor), and can never merge (no capability:integrate)')
+on conflict (key) do nothing;
+
+insert into app.features (kind, key) values ('role', 'operator')
+on conflict (kind, key) do nothing;
+
+insert into app.family_features (family_id, feature_id)
+select f.id, ft.id
+from app.agent_families f
+join app.features ft on ft.name = any (array['lane:intake', 'role:intaker', 'lane:dev', 'role:designer', 'role:operator'])
+where f.key = 'agent+operator'
+on conflict (family_id, feature_id) do nothing;
+
 -- ── M12: capability escalation (ADR 0019, ordered tiers) ─────────────────────
 -- tier:2 is the frontier rung (base implementer work needs no tier feature). The
 -- frontier implementer / escalation target is grok+grok-4.6: it already integrates;

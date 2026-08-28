@@ -4,6 +4,15 @@ You are the **external operator** of an AINARRES instance. You are **not** a swa
 job is to introduce new work into the system — either from a human or from your own analysis —
 at the correct level of abstraction.
 
+**You act under your own name.** The operator seat is a registered family, `agent+operator`
+(v8 / ADR 0028), holding `lane:intake` + `role:intaker` + `lane:dev` + `role:designer` +
+`role:operator` — enough to work the intake middle and create dev work, and nothing else. It
+holds **no `capability:integrate`** (it can never merge) and **no `role:auditor`** (the auditor
+stays human, and must stay a different identity from the operator). Do **not** mint as
+`human+intaker`, `claude-code+opus`, or `loop+driver` to do operator work: that puts your acts
+— and your mistakes — into a worker's history and, through M20, into that worker's track
+record. The seat exists so the substrate can tell your work from theirs.
+
 ## Scope
 
 You open **root-level requests** (briefs) on the `intake` lane and carry them through to
@@ -32,10 +41,18 @@ mint() {   # mint <family> <comma-separated features>
 }
 ```
 
-Use `--role oversight` (no features) for reading the oversight views.
-`loop/roles.sh::mint_token <poller>` does the same for a *configured tier*; there is no intaker
-tier, so mint by hand. The family must be registered in `db/seed.sql` or every verb returns
-`not_eligible: unknown family` (ADR 0007).
+Use `--role oversight` (no features) for reading the oversight views, or `--role monitor` for
+the read-only delegated variant. `loop/roles.sh::mint_token <poller>` does the same for a
+*configured tier*; the seat is not a tier, so mint by hand. The family must be registered in
+`db/seed.sql` or every verb returns `not_eligible: unknown family` (ADR 0007).
+
+Your own token, when you need one by hand:
+
+```bash
+TOK=$(mint agent+operator lane:intake,role:intaker,lane:dev,role:designer,role:operator)
+```
+
+`ainarres refine` and `ainarres operator-log` self-mint this for you — prefer them.
 
 ## Step 1 — open the brief (the intake channel)
 
@@ -68,7 +85,8 @@ step. This creates a task on the `intake` lane in stage `proposed_brief` as the 
 by design (`.agents/design/intake.md` D5); a real Customer↔Intaker dialog is a later slice. A
 brief that is POSTed and left alone sits in `proposed_brief` indefinitely.
 
-So you do it — one command, which self-mints the intaker token (you hold `JWT_SECRET`):
+So you do it — one command, which self-mints the **operator seat's** token (you hold
+`JWT_SECRET`):
 
 ```bash
 ainarres refine <brief-id> --note "brief refined"
@@ -76,21 +94,25 @@ ainarres refine                                    # no id: refines whatever is 
 ```
 
 That claims the brief and advances `proposed_brief → briefed`, which is what releases it to
-the standing designer. Claiming gives you a 30-minute lease (the `ainarres-intake` workflow
-default), so if you want to rework the payload by hand first, do it before advancing. The
-long form still works and is what `refine` does underneath:
+the standing designer. It runs as `agent+operator`, so the `claimed` and `transition` events
+name **you**, not the channel's human caller — and it writes a line to your ledger
+(`refine`, with the task id and the stage it moved). Claiming gives you a 30-minute lease
+(the `ainarres-intake` workflow default), so if you want to rework the payload by hand first,
+do it before advancing. The long form still works and is what `refine` does underneath:
 
 ```bash
-TOK=$(mint human+intaker lane:intake,role:intaker)
+TOK=$(mint agent+operator lane:intake,role:intaker,role:operator)
 node bin/ainarres.mjs claim --lane intake --token "$TOK"
 node bin/ainarres.mjs advance <brief-id> --to briefed --token "$TOK" --note "brief refined"
 ```
+
+`--family human+intaker` still overrides, for a human doing this by hand as the requester.
 
 `briefed → accepted` is the designer accepting a ready brief, so it needs `role:designer`
 (and `lane:intake` to claim it):
 
 ```bash
-TOK=$(mint claude-code+opus lane:intake,role:designer)
+TOK=$(mint agent+operator lane:intake,role:designer,role:operator)
 node bin/ainarres.mjs claim --lane intake --token "$TOK"
 node bin/ainarres.mjs advance <brief-id> --to accepted --token "$TOK"
 ```
@@ -110,14 +132,40 @@ Two ways from an accepted brief to decomposed tasks:
   `skills/ainarres-designer.md` specifies.
 
 ```bash
-TOK=$(mint claude-code+opus lane:dev,role:designer)
+TOK=$(mint agent+operator lane:dev,role:designer,role:operator)
 node bin/ainarres.mjs create --lane dev --payload '{...}' --token "$TOK"
 ```
+
+The seat holds `lane:dev` + `role:designer` because the M24 D4 create-gate is data-driven:
+creating in a lane requires the starter role of that lane's initial stage. That is the
+minimum that can create dev work at all — it is not a relaxation for you. Note the
+side-effect, recorded rather than hidden: the same pair also makes the seat claim-*eligible*
+for `proposed → designing`. **Do not claim dev design work.** Nothing pushes it to you (you
+run no poller); if you ever did, the event would carry your name.
 
 Do not assume the standing service will decompose a vague `proposed` dev task for you: its
 design pass spawns the `designer` tier with **no brief**, which is not the same path as a
 one-shot decomposition run. Give the service work that is already task-shaped, or run the
 one-shot pass.
+
+## Log what you did (the operator ledger)
+
+Task-shaped acts are already recorded — `refine`, `claim`, `create` land in `app.events`
+under `agent+operator`. What has nowhere else to go is the **instance-scoped** act: starting
+or stopping the standing service, reconfiguring a tier, deciding after a report to do
+nothing. `app.events.task_id` is `NOT NULL`, so those get their own append-only ledger:
+
+```bash
+ainarres operator-log --action service_start --target "the standing service" --detail '{"tiers":3}'
+ainarres operator-log --action refine --task <id> --outcome refused --reason "advance was refused"
+ainarres operator-actions --limit 20 --token "$OV"   # read it back (oversight or monitor)
+```
+
+`--action` is a lower_snake slug; `--outcome` is `ok` (default), `refused`, or `failed`.
+**Log your misses.** A refused or failed act is the operator's own, and recording it is what
+makes the seat governable rather than merely trusted. The ledger is written by you, so it is
+a good-faith trail, not proof — which is exactly why the task-shaped record in `app.events`
+stays the harder one. Read them together.
 
 ## Emergency direct path (use sparingly)
 

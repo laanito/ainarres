@@ -877,6 +877,35 @@ function parseGrokUsage(logText) {
   };
 }
 
+// ── v8 step 2 (ADR 0028): the operator seat ─────────────────────────────────
+// The operator is an identity, not "whoever holds JWT_SECRET". This family is seeded
+// in db/seed.sql with lane:intake + role:intaker + lane:dev + role:designer +
+// role:operator — enough to work the intake middle and create dev work under its own
+// name, and nothing else. It holds no capability:integrate, no role:auditor.
+const OPERATOR_FAMILY = "agent+operator";
+
+// Write one line to the operator's append-only ledger (api.record_operator_action,
+// role:operator-gated). BEST EFFORT ON PURPOSE: the ledger records what the operator
+// did; it must never be the reason an operator act fails. A substrate that refuses the
+// ledger write (an unseated family, a governance denial) still let the act itself
+// through or not on its own merits, and the act's own event remains the harder record.
+// Returns the envelope when it landed, null otherwise.
+async function logOperatorAction(token, { action, target = null, task = null, outcome = "ok", reason = null, detail = {} }) {
+  try {
+    const r = await rpc("record_operator_action", {
+      p_action: action,
+      p_target: target,
+      p_task: task,
+      p_outcome: outcome,
+      p_reason: reason,
+      p_detail: detail,
+    }, token);
+    return r.body && r.body.ok === true ? r.body : null;
+  } catch {
+    return null;
+  }
+}
+
 const COMMANDS = {
   // v8 ergonomics — post a request to the LOCAL INTAKE CHANNEL (ADR 0025). No substrate
   // JWT: the channel authenticates with the pre-shared key, so this reads a key, not a
@@ -930,9 +959,18 @@ const COMMANDS = {
     const lane = values.lane ?? "intake";
     const to = values.to ?? "briefed";
     const want = positional ?? values.brief ?? null;
-    const family = values.family ?? "human+intaker";
+    // v8 step 2 (ADR 0028): refine runs as the OPERATOR SEAT, not as the intake
+    // channel's human caller. The act is the operator's, so the event, the track
+    // record and the ledger line must all say `agent+operator`. `--family` still
+    // overrides for the human doing it by hand.
+    const family = values.family ?? OPERATOR_FAMILY;
     const tok = token || mintJwt(
-      { sub: randomUUID(), family, role: "agent", features: [`lane:${lane}`, "role:intaker"] },
+      {
+        sub: randomUUID(),
+        family,
+        role: "agent",
+        features: [`lane:${lane}`, "role:intaker", "role:operator"],
+      },
       Number(values.ttl ?? 900),
     );
     const tries = Math.max(1, Number(values.tries ?? 5));
@@ -963,8 +1001,16 @@ const COMMANDS = {
         note: values.note ?? "refined by the operator",
       }, tok);
       if (!a.body || a.body.ok !== true) {
-        fail(`refine: advance to ${to} failed (${(a.body && a.body.code) || a.status}${a.body && a.body.reason ? `: ${a.body.reason}` : ""})`);
+        const why = `${(a.body && a.body.code) || a.status}${a.body && a.body.reason ? `: ${a.body.reason}` : ""}`;
+        await logOperatorAction(tok, { action: "refine", target: id, task: id, outcome: "refused", reason: why });
+        fail(`refine: advance to ${to} failed (${why})`);
       }
+      await logOperatorAction(tok, {
+        action: "refine",
+        target: id,
+        task: id,
+        detail: { lane, from: env.task.stage_key, to: a.body.task.stage_key, released: skipped.length },
+      });
       if (values.json) return emit(a.body);
       process.stdout.write(`refined ${id}  ${env.task.stage_key} → ${a.body.task.stage_key}\n`);
       if (skipped.length) process.stdout.write(`(released ${skipped.length} other claimable brief(s) to reach it)\n`);
@@ -1100,6 +1146,49 @@ const COMMANDS = {
   // demanded bundle has no seated family at all.
   async demand(rest, values, token) {
     const r = await restGet("demand", token);
+    emit(r.body, r.httpOk);
+  },
+
+  // v8 step 2 (ADR 0028) — WRITE one line to the operator's ledger. The instance-scoped
+  // acts (started the service, reconfigured a tier, decided to do nothing) have no task,
+  // so they cannot be app.events; this is where they land. Self-mints a seat token when
+  // none is supplied, exactly as `refine` does.
+  async "operator-log"(rest, values, token) {
+    const action = values.action ?? null;
+    if (!action) fail("operator-log: --action SLUG is required (lower_snake, e.g. service_start)");
+    const outcome = values.outcome ?? "ok";
+    if (!["ok", "refused", "failed"].includes(outcome)) {
+      fail(`operator-log: --outcome must be ok, refused or failed (got '${outcome}')`);
+    }
+    let detail = {};
+    if (values.detail) {
+      try { detail = JSON.parse(values.detail); } catch (e) { fail(`operator-log: --detail is not JSON (${e.message})`); }
+    }
+    const tok = token || mintJwt(
+      {
+        sub: randomUUID(),
+        family: values.family ?? OPERATOR_FAMILY,
+        role: "agent",
+        features: ["role:operator"],
+      },
+      Number(values.ttl ?? 900),
+    );
+    const r = await rpc("record_operator_action", {
+      p_action: action,
+      p_target: values.target ?? null,
+      p_task: values.task ?? null,
+      p_outcome: outcome,
+      p_reason: values.reason ?? null,
+      p_detail: detail,
+    }, tok);
+    emit(r.body, r.httpOk);
+  },
+
+  // READ the ledger (api.operator_actions, newest-first). Oversight or monitor token —
+  // a delegated monitor whose job is "read what the operator did" holds `monitor`.
+  async "operator-actions"(rest, values, token) {
+    const limit = values.limit ? Number(values.limit) : 20;
+    const r = await restGet(`operator_actions?limit=${limit}`, token);
     emit(r.body, r.httpOk);
   },
 
@@ -1297,6 +1386,8 @@ const OPTS = {
   abandoned: { lane: { type: "string" }, token: { type: "string" } },
   demand: { token: { type: "string" } },
   "governance-status": { token: { type: "string" } },
+  "operator-log": { action: { type: "string" }, target: { type: "string" }, task: { type: "string" }, outcome: { type: "string" }, reason: { type: "string" }, detail: { type: "string" }, family: { type: "string" }, ttl: { type: "string" }, token: { type: "string" } },
+  "operator-actions": { limit: { type: "string" }, token: { type: "string" } },
   "service-status": { file: { type: "string" } },
   status: { lane: { type: "string" }, limit: { type: "string" }, watch: { type: "boolean" }, interval: { type: "string" }, compact: { type: "boolean" }, json: { type: "boolean" }, token: { type: "string" } },
   events: { lane: { type: "string" }, task: { type: "string" }, family: { type: "string" }, type: { type: "string" }, limit: { type: "string" }, json: { type: "boolean" }, token: { type: "string" } },
@@ -1323,8 +1414,11 @@ const USAGE = `ainarres — agent CLI (verbs over PostgREST)
   heartbeat <task-id> [--watch --interval 60 --max 3600]
   intake  (--request TEXT | --file PATH) [--subject S] [--port N | --url URL] [--psk K | --psk-file P]
             post a request to the local intake channel (PSK auth, no JWT; key from loop/run/intake.psk)
-  refine  [<brief-id>] [--note T] [--lane intake] [--family human+intaker]
-            the intaker's step: claim a brief and advance it to 'briefed' (self-mints the intaker token)
+  refine  [<brief-id>] [--note T] [--lane intake] [--family agent+operator]
+            the intaker's step: claim a brief and advance it to 'briefed' (self-mints the OPERATOR SEAT token)
+  operator-log  --action SLUG [--target T] [--task UUID] [--outcome ok|refused|failed] [--reason T] [--detail JSON]
+            v8 append one line to the operator's ledger — the instance-scoped acts that cannot be events
+  operator-actions [--limit N]   read that ledger, newest first (oversight or monitor token)
   board | feed | abandoned [--lane L] [--task UUID] [--limit N]
   demand              v7.1 pending work by required-capability bundle (what to wake) — oversight/monitor token
   governance-status   v5 governance state (banned/permanent/heal_at) per (family, capability) — oversight token
@@ -1356,7 +1450,7 @@ if (isMain) {
     const token = bearer(values);
     // `intake` authenticates with the channel's PSK, and `refine` self-mints the intaker
     // token it needs — neither requires an ambient AINARRES_TOKEN.
-    const needsToken = !["token", "version", "service-status", "intake", "refine"].includes(cmd);
+    const needsToken = !["token", "version", "service-status", "intake", "refine", "operator-log"].includes(cmd);
     if (needsToken && !token) fail(`${cmd}: no token (set AINARRES_TOKEN or pass --token)`);
     await COMMANDS[cmd](rest, values, token, positionals[0]);
   }
