@@ -85,6 +85,25 @@ async function restGet(path, token) {
   return { status: res.status, httpOk: res.ok, body: json };
 }
 
+// v8 ergonomics — where the intake channel's pre-shared key comes from, in precedence
+// order: --psk, then INTAKE_PSK, then --psk-file, then the key file the channel itself
+// writes (loop/run/intake.psk). That last one is what removes the copy-paste: start the
+// channel, then post, with the key never passing through a human's clipboard. Returns
+// null when no key can be found — the caller decides how loudly to complain.
+export function resolveIntakePsk(values = {}, env = process.env) {
+  if (values.psk) return values.psk;
+  if (env.INTAKE_PSK) return env.INTAKE_PSK;
+  const path = values["psk-file"]
+    || env.INTAKE_PSK_FILE
+    || fileURLToPath(new URL("../loop/run/intake.psk", import.meta.url));
+  try {
+    const key = readFileSync(path, "utf8").trim();
+    return key || null;
+  } catch {
+    return null;
+  }
+}
+
 // Parse flags + positionals for a subcommand.
 function args(rest, options) {
   return parseArgs({ args: rest, options, allowPositionals: true });
@@ -859,6 +878,101 @@ function parseGrokUsage(logText) {
 }
 
 const COMMANDS = {
+  // v8 ergonomics — post a request to the LOCAL INTAKE CHANNEL (ADR 0025). No substrate
+  // JWT: the channel authenticates with the pre-shared key, so this reads a key, not a
+  // token. `--file -` reads the request from stdin.
+  async intake(rest, values) {
+    let text = values.request ?? null;
+    if (!text && values.file) {
+      try {
+        text = readFileSync(values.file === "-" ? 0 : values.file, "utf8");
+      } catch (e) {
+        fail(`intake: cannot read ${values.file} (${e.message})`);
+      }
+    }
+    if (!text || !text.trim()) fail("intake: need --request TEXT or --file PATH (--file - for stdin)");
+    const psk = resolveIntakePsk(values);
+    if (!psk) {
+      fail("intake: no pre-shared key — start the channel (`make intake-serve`, which writes loop/run/intake.psk), or pass --psk / set INTAKE_PSK");
+    }
+    const port = values.port ?? process.env.INTAKE_PORT ?? "3020";
+    const url = values.url ?? `http://127.0.0.1:${port}/intake`;
+    const body = { request: text.trim(), ...(values.subject ? { subject: values.subject } : {}) };
+    let res;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Intake-Key": psk, Connection: "close" },
+        body: JSON.stringify(body),
+      });
+    } catch (e) {
+      fail(`intake: cannot reach the channel at ${url} (${e.message}) — is \`make intake-serve\` running?`);
+    }
+    const raw = await res.text();
+    let json;
+    try { json = raw ? JSON.parse(raw) : null; } catch { json = { raw }; }
+    if (values.json) return emit(json, res.ok);
+    if (!res.ok) {
+      process.stderr.write(`ainarres: intake refused (${res.status}): ${(json && (json.error || json.code)) || raw}\n`);
+      process.exit(1);
+    }
+    process.stdout.write(`brief ${json.brief_id}  stage=${json.stage ?? "?"}\n`);
+    process.stdout.write(`next: ainarres refine ${json.brief_id}   (the intaker's refine step — the swarm takes it from there)\n`);
+  },
+
+  // v8 ergonomics — the human intaker's REFINE step in one command: claim a brief and
+  // advance proposed_brief → briefed, which is what releases it to the standing designer.
+  // Self-mints the intaker token (the owner already holds JWT_SECRET; `ainarres token`
+  // has always been able to mint this exact one) unless --token is given. No brief id =
+  // "whatever is claimable". With an id, a claim that returns a DIFFERENT brief is
+  // released and retried — note that a release bumps that task's attempts.
+  async refine(rest, values, token, positional) {
+    const lane = values.lane ?? "intake";
+    const to = values.to ?? "briefed";
+    const want = positional ?? values.brief ?? null;
+    const family = values.family ?? "human+intaker";
+    const tok = token || mintJwt(
+      { sub: randomUUID(), family, role: "agent", features: [`lane:${lane}`, "role:intaker"] },
+      Number(values.ttl ?? 900),
+    );
+    const tries = Math.max(1, Number(values.tries ?? 5));
+    const skipped = [];
+    for (let i = 0; i < tries; i++) {
+      const c = await rpc("claim_next_task", { lane_key: lane }, tok);
+      const env = c.body;
+      // An empty claim is ok:true with code "empty" and a NULL task (app.envelope), not a
+      // failure — so it has to be checked before reaching for env.task.
+      if (!env || env.ok !== true || env.code === "empty" || !env.task) {
+        const code = (env && env.code) || c.status;
+        if (code === "empty") {
+          fail(want
+            ? `refine: nothing claimable on lane ${lane} (brief ${want} may already be past ${to}${skipped.length ? `; released ${skipped.length} other brief(s) first` : ""})`
+            : `refine: nothing claimable on lane ${lane} — no brief is waiting for the intaker`);
+        }
+        fail(`refine: claim failed (${code}${env && env.reason ? `: ${env.reason}` : ""})`);
+      }
+      const id = env.task.id;
+      if (want && id !== want) {
+        skipped.push(id);
+        await rpc("release_task", { task_id: id, reason: "refine: not the requested brief" }, tok);
+        continue;
+      }
+      const a = await rpc("advance_task", {
+        task_id: id,
+        to_stage: to,
+        note: values.note ?? "refined by the operator",
+      }, tok);
+      if (!a.body || a.body.ok !== true) {
+        fail(`refine: advance to ${to} failed (${(a.body && a.body.code) || a.status}${a.body && a.body.reason ? `: ${a.body.reason}` : ""})`);
+      }
+      if (values.json) return emit(a.body);
+      process.stdout.write(`refined ${id}  ${env.task.stage_key} → ${a.body.task.stage_key}\n`);
+      if (skipped.length) process.stdout.write(`(released ${skipped.length} other claimable brief(s) to reach it)\n`);
+      return;
+    }
+    fail(`refine: could not claim ${want} in ${tries} tries (saw ${skipped.join(", ") || "nothing"})`);
+  },
+
   // Mint an HS256 token locally (operator holds the secret; signing lives outside
   // the DB per M2). Features are explicit; this never reads the DB.
   token(rest) {
@@ -1178,6 +1292,8 @@ const OPTS = {
   status: { lane: { type: "string" }, limit: { type: "string" }, watch: { type: "boolean" }, interval: { type: "string" }, compact: { type: "boolean" }, json: { type: "boolean" }, token: { type: "string" } },
   events: { lane: { type: "string" }, task: { type: "string" }, family: { type: "string" }, type: { type: "string" }, limit: { type: "string" }, json: { type: "boolean" }, token: { type: "string" } },
   report: { lane: { type: "string" }, limit: { type: "string" }, json: { type: "boolean" }, token: { type: "string" } },
+  intake: { request: { type: "string" }, file: { type: "string" }, subject: { type: "string" }, url: { type: "string" }, port: { type: "string" }, psk: { type: "string" }, "psk-file": { type: "string" }, json: { type: "boolean" } },
+  refine: { brief: { type: "string" }, note: { type: "string" }, lane: { type: "string" }, to: { type: "string" }, family: { type: "string" }, tries: { type: "string" }, ttl: { type: "string" }, json: { type: "boolean" }, token: { type: "string" } },
   "record-usage": { actor: { type: "string" }, family: { type: "string" }, "from-log": { type: "string" }, data: { type: "string" }, sweep: { type: "string" }, task: { type: "string" }, token: { type: "string" } },
 };
 
@@ -1196,6 +1312,10 @@ const USAGE = `ainarres — agent CLI (verbs over PostgREST)
   block     <task-id> --reason T
   unblock   <task-id> [--note T]
   heartbeat <task-id> [--watch --interval 60 --max 3600]
+  intake  (--request TEXT | --file PATH) [--subject S] [--port N | --url URL] [--psk K | --psk-file P]
+            post a request to the local intake channel (PSK auth, no JWT; key from loop/run/intake.psk)
+  refine  [<brief-id>] [--note T] [--lane intake] [--family human+intaker]
+            the intaker's step: claim a brief and advance it to 'briefed' (self-mints the intaker token)
   board | feed | abandoned [--lane L] [--task UUID] [--limit N]
   governance-status   v5 governance state (banned/permanent/heal_at) per (family, capability) — oversight token
   status  [--lane L] [--limit N] [--watch [--interval 2]]   one-glance oversight summary (board + active + abandoned + why-stuck)
@@ -1224,7 +1344,9 @@ if (isMain) {
   } else {
     const { values, positionals } = args(rest, OPTS[cmd]);
     const token = bearer(values);
-    const needsToken = !["token", "version", "service-status"].includes(cmd);
+    // `intake` authenticates with the channel's PSK, and `refine` self-mints the intaker
+    // token it needs — neither requires an ambient AINARRES_TOKEN.
+    const needsToken = !["token", "version", "service-status", "intake", "refine"].includes(cmd);
     if (needsToken && !token) fail(`${cmd}: no token (set AINARRES_TOKEN or pass --token)`);
     await COMMANDS[cmd](rest, values, token, positionals[0]);
   }

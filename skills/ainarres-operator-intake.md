@@ -42,22 +42,22 @@ tier, so mint by hand. The family must be registered in `db/seed.sql` or every v
 Start the server (it sources `loop.env`, so it targets the loop substrate):
 
 ```bash
-INTAKE_PSK=<key> make intake-serve      # loopback-only, 127.0.0.1:3020 (override: INTAKE_PORT)
+make intake-serve      # loopback-only, 127.0.0.1:3020 (override: INTAKE_PORT)
 ```
 
-POST the request:
+It establishes its own pre-shared key — `INTAKE_PSK` if you set one, else the key in
+`loop/run/intake.psk`, else a fresh one it generates and persists there (mode 0600). There
+is always a key; you just don't have to invent or carry it.
+
+Post the request:
 
 ```bash
-curl -X POST http://127.0.0.1:3020/intake \
-  -H "X-Intake-Key: $INTAKE_PSK" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "request": "<full human-readable request>",
-    "subject": "<optional short subject>"
-  }'
+ainarres intake --request "<full human-readable request>" [--subject "<short subject>"]
+ainarres intake --file path/to/request.txt          # or --file - to read stdin
 ```
 
-This creates a task on the `intake` lane in stage `proposed_brief` as the family
+It reads the key from `loop/run/intake.psk`, prints the new brief's id, and names the next
+step. This creates a task on the `intake` lane in stage `proposed_brief` as the family
 `human+intaker` (features `lane:intake` + `role:intaker` only — no `lane:dev`, no
 `capability:integrate`). Read the intake board via the oversight view `api.open_briefs`.
 
@@ -68,13 +68,21 @@ This creates a task on the `intake` lane in stage `proposed_brief` as the family
 by design (`.agents/design/intake.md` D5); a real Customer↔Intaker dialog is a later slice. A
 brief that is POSTed and left alone sits in `proposed_brief` indefinitely.
 
-So you do it. Claiming gives you a 30-minute lease (the `ainarres-intake` workflow default), so
-refine promptly or re-claim:
+So you do it — one command, which self-mints the intaker token (you hold `JWT_SECRET`):
+
+```bash
+ainarres refine <brief-id> --note "brief refined"
+ainarres refine                                    # no id: refines whatever is claimable
+```
+
+That claims the brief and advances `proposed_brief → briefed`, which is what releases it to
+the standing designer. Claiming gives you a 30-minute lease (the `ainarres-intake` workflow
+default), so if you want to rework the payload by hand first, do it before advancing. The
+long form still works and is what `refine` does underneath:
 
 ```bash
 TOK=$(mint human+intaker lane:intake,role:intaker)
 node bin/ainarres.mjs claim --lane intake --token "$TOK"
-# refine in place: sharpen the goal, name the files, define a SUBSTRATE-FREE validate
 node bin/ainarres.mjs advance <brief-id> --to briefed --token "$TOK" --note "brief refined"
 ```
 

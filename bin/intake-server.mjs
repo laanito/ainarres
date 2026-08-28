@@ -27,26 +27,61 @@
 // Standalone (no coupling to bin/ainarres.mjs): its own zero-dep HS256 minter + fetch,
 // matching the CLI's JWT shape so the substrate accepts the token.
 
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const BASE = (process.env.AINARRES_BASE_URL || "http://localhost:3010").replace(/\/$/, "");
 const SECRET = process.env.JWT_SECRET || "ainarres-dev-only-secret-change-me-min-32-chars";
 const HOST = process.env.INTAKE_HOST || "127.0.0.1";
 const PORT = Number(process.env.INTAKE_PORT || 3020);
-const PSK = process.env.INTAKE_PSK || "";
+// The pre-shared key. Supplied via INTAKE_PSK, or — v8 ergonomics — GENERATED and
+// persisted so nothing has to be hand-carried between shells. Precedence:
+//   INTAKE_PSK  →  an existing key file (stable across restarts)  →  a fresh 32-byte key.
+// The key is always written to the file (mode 0600) so the client side
+// (`ainarres intake`) can read it instead of the owner copy-pasting it. This does NOT
+// relax ADR 0025's posture: there is still always a key, still no anonymous write. What
+// changes is only who invents it. Local, single-owner, same filesystem — the same
+// assumption the channel already makes.
+const PSK_FILE = process.env.INTAKE_PSK_FILE
+  || fileURLToPath(new URL("../loop/run/intake.psk", import.meta.url));
+let PSK = process.env.INTAKE_PSK || "";
+let PSK_SOURCE = PSK ? "INTAKE_PSK" : "";
+if (!PSK) {
+  try {
+    PSK = readFileSync(PSK_FILE, "utf8").trim();
+    if (PSK) PSK_SOURCE = "key file";
+  } catch { /* no file yet */ }
+}
+if (!PSK) {
+  PSK = randomBytes(32).toString("hex");
+  PSK_SOURCE = "generated";
+}
 const FAMILY = process.env.INTAKE_FAMILY || "human+intaker";
 const TOKEN_TTL = Number(process.env.INTAKE_TOKEN_TTL || 300);
 const MAX_BODY = 64 * 1024; // 64 KiB — a brief is small; cap unbounded input.
 
 // ── Refuse to run without a safe posture (ADR 0025) ───────────────────────────
+// Persist the key (0600) so `ainarres intake` can read it — no copy-paste, and a restart
+// keeps the same key so an already-configured client keeps working.
+try {
+  mkdirSync(dirname(PSK_FILE), { recursive: true });
+  writeFileSync(PSK_FILE, `${PSK}\n`, { mode: 0o600 });
+} catch (e) {
+  console.error(`intake-server: could not write the key file ${PSK_FILE} (${e.message}) — clients must use INTAKE_PSK.`);
+}
+
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1"]);
 if (!LOOPBACK.has(HOST)) {
   console.error(`intake-server: refusing to bind non-loopback host '${HOST}'. v7 is local-only (ADR 0025); set INTAKE_HOST to 127.0.0.1/localhost/::1 (or leave unset).`);
   process.exit(2);
 }
 if (!PSK) {
-  console.error("intake-server: INTAKE_PSK is required (no pre-shared key = no auth). Refusing to start.");
+  // Unreachable: a key is generated above when none is supplied. Kept as the invariant's
+  // last line of defence — no key must never mean no auth (ADR 0025).
+  console.error("intake-server: no pre-shared key could be established (no PSK = no auth). Refusing to start.");
   process.exit(2);
 }
 
@@ -158,6 +193,10 @@ const server = createServer((req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`intake-server: listening on http://${HOST}:${PORT}/intake → substrate ${BASE} (identity=${FAMILY})`);
-  console.log("intake-server: auth = X-Intake-Key (pre-shared); loopback-only, single-owner (ADR 0025). Stop with SIGINT/SIGTERM.");
+  console.log(`intake-server: auth = X-Intake-Key (pre-shared, ${PSK_SOURCE}); key file ${PSK_FILE}; loopback-only, single-owner (ADR 0025). Stop with SIGINT/SIGTERM.`);
+  if (PSK_SOURCE === "generated") {
+    console.log(`intake-server: generated key ${PSK}`);
+    console.log("intake-server: `ainarres intake --request \"…\"` reads it from the key file — no need to copy it.");
+  }
 });
 for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { console.log(`\nintake-server: ${sig} — stopping.`); server.close(() => process.exit(0)); });

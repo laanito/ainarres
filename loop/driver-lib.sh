@@ -143,6 +143,22 @@ record_usage() {
      >/dev/null 2>>"$RUN_DIR/usage.log" || true
 }
 
+# A pool member that claimed nothing leaves a log holding only its worktree line — by v8,
+# 189 per-sweep files had piled up in loop/run/, 125 of them under 100 bytes, which makes
+# the directory useless for eyeballing the run that matters. Drop those, and ONLY those:
+# pruning requires the sweep to have exited 0, so a short log that is short BECAUSE the
+# harness failed (e.g. "opencode: not found") is always kept. Opt out with
+# LOOP_KEEP_EMPTY_LOGS=1.
+prune_noop_log() {
+  local f="$1" rc="${2:-0}" size
+  [ "${LOOP_KEEP_EMPTY_LOGS:-0}" = "1" ] && return 0
+  [ "$rc" -eq 0 ] || return 0
+  [ -f "$f" ] || return 0
+  size="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"
+  [ "${size:-0}" -le 200 ] && rm -f "$f"
+  return 0
+}
+
 # ── Spawn primitives (backgrounded + reaped so a trap can kill the subtree) ────
 
 # Run ONE tier's harness sweep to completion (its skill loops claim→work→advance until
@@ -173,10 +189,13 @@ run_pool() {
     pids+=("$!"); subs+=("$sub"); toks+=("$tok")
   done
   POOL_PIDS=("${pids[@]}")                 # expose to stop_active for the kill trap
+  local mrc
   for i in "${!pids[@]}"; do
-    wait "${pids[$i]}" || true             # a member failing is fine; the board is the truth
+    mrc=0
+    wait "${pids[$i]}" || mrc=$?           # a member failing is fine; the board is the truth
     record_usage "$tier" "${subs[$i]}" "$RUN_DIR/$tier-${subs[$i]}.log"
     release_stranded "${subs[$i]}" "${toks[$i]}"
+    prune_noop_log "$RUN_DIR/$tier-${subs[$i]}.log" "$mrc"
   done
   POOL_PIDS=()
 }

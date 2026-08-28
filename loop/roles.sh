@@ -67,7 +67,13 @@ LOOP_POOL_TIER="${LOOP_POOL_TIER:-cheap-implementer}"
 # serial crack — it's a single sweep because its :cloud backend allows only 1 concurrent
 # session, so it can't join the ×N pool. Then the higher-quality fallbacks: cursor-implementer
 # (cursor-agent + composer-2.5), backed by nemotron-3-ultra. All single serial sweeps.
-LOOP_SERIAL_TIERS=(qwen-implementer muse-implementer cursor-implementer fallback-implementer)
+# DISABLED 2026-08-27 — qwen-implementer: its backend model was RETIRED upstream
+# ("qwen3-coder-next was retired at 2026-07-15", HTTP 410, isRetryable:false), so the tier
+# burned a worktree setup and a sweep on EVERY activation and always exited non-zero. Same
+# treatment as nano-implementer: the wiring below (role_family / role_features /
+# harness_sweep) stays as a template — set OPENCODE_QWEN_MODEL to a live model and add the
+# tier back here to re-enable.
+LOOP_SERIAL_TIERS=(muse-implementer cursor-implementer fallback-implementer)
 
 # Tier-0 pre-pass: tiers swept ONCE, serially, BEFORE the concurrent pool each round
 # (driver.sh). nano is the cheapest implementer and drains the easy work it can before

@@ -141,8 +141,9 @@ service-selftest: loop-reset
 ## The local intake CHANNEL (v7 M26, ADR 0025): a loopback-bound HTTP endpoint an
 ## external Customer POSTs a request to (X-Intake-Key: <psk>) → a proposed_brief in the
 ## intake lane, which the standing service then drains. Targets the LOOP substrate.
-## Requires INTAKE_PSK; optional INTAKE_PORT (default 3020). First external ingress —
-## local, single-owner, light (ADR 0025). Usage: INTAKE_PSK=... make intake-serve
+## Optional INTAKE_PORT (default 3020). The KEY needs no ceremony (v8): supply INTAKE_PSK
+## to pin one, or let the channel generate it and persist it to loop/run/intake.psk (0600),
+## which `ainarres intake` reads — so the key is never copy-pasted between shells. There is
+## always a key; ADR 0025's "no anonymous write" is unchanged.
 intake-serve:
-	@test -n "$(INTAKE_PSK)" || { echo "usage: INTAKE_PSK=<key> make intake-serve  (a pre-shared key is required — no key, no auth)"; exit 2; }
 	@bash -c 'set -a; source loop.env; set +a; INTAKE_PSK="$(INTAKE_PSK)" INTAKE_PORT="$${INTAKE_PORT:-3020}" node bin/intake-server.mjs'
