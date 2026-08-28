@@ -86,6 +86,16 @@ capability ∩ the bundles `api.demand` reports as actually waiting. Two consequ
   **not** a seating gap: seating a family for it would dismantle the human boundary M22/M24
   built on purpose.
 
+The gate re-reads `api.demand` on **every spawn decision**, not once per round, so a tier
+decides against the board as it is at that moment. With one pending task and four capable
+implementer tiers, the pool claims it and the other three stand down; a task the designer
+just created is picked up in the same round rather than the next. And "nothing is pending" is
+now distinct from "could not ask": the first spawns nothing, the second still spawns
+everything (not knowing costs money, never correctness).
+
+`make demand-gate-selftest` pins all of this with **no substrate** — safe to run while a
+service is up.
+
 Push-wake (`LISTEN/NOTIFY` instead of idle polling, ADR 0027) is **designed, not built**. The
 service still polls every `LOOP_IDLE_POLL_SECS`.
 
