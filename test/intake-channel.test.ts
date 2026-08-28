@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { exec, query, scalar, waitForDb } from "./helpers/db";
 import { rpc, waitForReady } from "./helpers/http";
@@ -18,6 +21,12 @@ import { mintToken } from "./helpers/mint";
 
 const PORT = 3099; // fixed loopback test port
 const PSK = "test-intake-preshared-key-0123456789";
+// The server PERSISTS whatever key it ends up using to its key file (v8 ergonomics), so a
+// test that leaves this unset overwrites the OPERATOR'S REAL loop/run/intake.psk with a
+// fixture key — and the running channel and the operator's CLI then disagree, for an
+// inscrutable 401. Point it at a temp file, exactly as test/intake-cli.test.ts does. Same
+// class of bug as the loop-board pollution vectors: test state escaping into live state.
+const KEY_FILE = join(mkdtempSync(join(tmpdir(), "ainarres-intake-")), "intake.psk");
 const FAMILY = "human+intaker";
 const base = `http://127.0.0.1:${PORT}`;
 
@@ -62,7 +71,13 @@ beforeAll(async () => {
   await waitForReady();
 
   server = spawn("node", ["bin/intake-server.mjs"], {
-    env: { ...process.env, INTAKE_PSK: PSK, INTAKE_PORT: String(PORT), INTAKE_HOST: "127.0.0.1" },
+    env: {
+      ...process.env,
+      INTAKE_PSK: PSK,
+      INTAKE_PSK_FILE: KEY_FILE,
+      INTAKE_PORT: String(PORT),
+      INTAKE_HOST: "127.0.0.1",
+    },
     stdio: "ignore",
   });
   // Wait until it accepts connections (an unauthenticated POST returning 401 proves it is up).

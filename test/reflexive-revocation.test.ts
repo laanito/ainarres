@@ -148,11 +148,18 @@ describe("M21 reflexive temporary revocation", () => {
     const iSub = randomUUID();
     const created = await ok(rpc("create_task", { token: impl2(iSub), body: { lane_key: "m21" } }));
     const id = created.task.id;
-    const before = query<{ c: string }>(`select count(*)::text c from app.governance_strikes`)[0].c;
+    // Count only THIS test's families. A global count races every other file running in
+    // parallel — a strike legitimately created elsewhere between the two reads looked
+    // exactly like the fail-safe leaking, and made this test flaky.
+    const strikes = () => query<{ c: string }>(`
+      select count(*)::text c from app.governance_strikes gs
+      join app.agent_families f on f.id = gs.family_id
+      where f.key in ('${IMPL}', '${IMPL2}', '${REV}')`)[0].c;
+    const before = strikes();
     // Stamp a reject transition directly (human/system style), no producing advance.
     exec(`insert into app.events (task_id, actor, type, data)
           values ('${id}', null, 'transition', '{"kind":"reject","from":"reviewing","to":"implementing"}'::jsonb)`);
-    const after = query<{ c: string }>(`select count(*)::text c from app.governance_strikes`)[0].c;
+    const after = strikes();
     expect(after).toBe(before); // no strike created
   });
 });

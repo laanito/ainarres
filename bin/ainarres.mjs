@@ -86,15 +86,31 @@ async function restGet(path, token) {
 }
 
 // v8 ergonomics — where the intake channel's pre-shared key comes from, in precedence
-// order: --psk, then INTAKE_PSK, then --psk-file, then the key file the channel itself
-// writes (loop/run/intake.psk). That last one is what removes the copy-paste: start the
-// channel, then post, with the key never passing through a human's clipboard. Returns
-// null when no key can be found — the caller decides how loudly to complain.
+// order: --psk, then --psk-file (exclusive when given), then INTAKE_PSK, then INTAKE_PSK_FILE, then the key file
+// the channel itself writes (loop/run/intake.psk). That last one is what removes the
+// copy-paste: start the channel, then post, with the key never passing through a human's
+// clipboard. Returns null when no key can be found — the caller decides how loudly to
+// complain.
+//
+// EXPLICIT FLAGS BEAT THE ENVIRONMENT, both of them. The earlier order put INTAKE_PSK
+// above --psk-file, so a stale exported key silently won over a path the operator had
+// just typed — and the only symptom was a 401 with nothing to point at. An ambient
+// variable must never quietly override an argument.
 export function resolveIntakePsk(values = {}, env = process.env) {
   if (values.psk) return values.psk;
+  // An explicit --psk-file is the ONLY source when given: if the operator named a file,
+  // quietly reading a DIFFERENT key (the env, the default file) when it cannot be read is
+  // the same silent substitution this ordering exists to stop. Unreadable or empty ⇒ null,
+  // and the caller says so out loud.
+  if (values["psk-file"]) {
+    try {
+      return readFileSync(values["psk-file"], "utf8").trim() || null;
+    } catch {
+      return null;
+    }
+  }
   if (env.INTAKE_PSK) return env.INTAKE_PSK;
-  const path = values["psk-file"]
-    || env.INTAKE_PSK_FILE
+  const path = env.INTAKE_PSK_FILE
     || fileURLToPath(new URL("../loop/run/intake.psk", import.meta.url));
   try {
     const key = readFileSync(path, "utf8").trim();
