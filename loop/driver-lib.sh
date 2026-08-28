@@ -320,6 +320,7 @@ BOARD_JSON="${RUN_DIR:-/tmp}/.board.$$.json"
 LOOP_CONSUME_DEMAND="${LOOP_CONSUME_DEMAND:-1}"   # 0 = v7 behaviour (spawn every tier)
 CAPMAP_DOWN=""      # newline-separated "tier|why"
 DEMAND=""           # newline-separated "count|feat,feat,…"  (bundle features sorted)
+DEMAND_KNOWN=0      # 1 once api.demand has actually answered; see refresh_demand
 UNSERVICEABLE=""    # newline-separated "count|feat,feat,…|cause"
 UNSERVICEABLE_LOGGED=""   # what we last said out loud, so a standing condition is said ONCE
 
@@ -378,12 +379,30 @@ refresh_capability_map() {
   return 0
 }
 
-# Read api.demand → DEMAND. Unreadable (no view, no substrate, error) leaves it EMPTY, which
-# tier_has_demand reads as "everything is demanded" — the v7 gate.
+# Read api.demand → DEMAND, and record whether the read SUCCEEDED in DEMAND_KNOWN.
+#
+# The two must be separate. "The board is empty" and "I could not ask" both produce an
+# empty DEMAND, and collapsing them costs real money: after the last task of a round is
+# finished, demand is legitimately `[]`, and a gate that reads empty as "everything is
+# demanded" wakes every remaining tier to discover there is nothing to do. So:
+#   DEMAND_KNOWN=1, DEMAND empty  ⇒ nothing is pending. Spawn nothing.
+#   DEMAND_KNOWN=0                ⇒ we do not know. Spawn everything (degrade to v7).
+# The degrade direction is deliberate and unchanged: not knowing costs money, never
+# correctness. Only the case we DO know is now acted on.
+#
+# The node reducer prints a leading `ok` line when it actually parsed an array, which is
+# what distinguishes an empty board from an error envelope, a dead substrate, or a
+# missing view — all of which yield no output at all.
 refresh_demand() {
-  [ "${LOOP_CONSUME_DEMAND:-1}" = "1" ] || { DEMAND=""; return 0; }
-  DEMAND="$(ai demand --token "$OVERSIGHT_TOKEN" 2>/dev/null \
-    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{r=[]};if(!Array.isArray(r))r=[];process.stdout.write(r.filter(x=>x&&Array.isArray(x.bundle)).map(x=>x.pending+"|"+x.bundle.slice().sort().join(",")).join("\n"))})' || true)"
+  local raw
+  [ "${LOOP_CONSUME_DEMAND:-1}" = "1" ] || { DEMAND=""; DEMAND_KNOWN=0; return 0; }
+  raw="$(ai demand --token "$OVERSIGHT_TOKEN" 2>/dev/null \
+    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{return};if(!Array.isArray(r))return;process.stdout.write(["ok"].concat(r.filter(x=>x&&Array.isArray(x.bundle)).map(x=>x.pending+"|"+x.bundle.slice().sort().join(","))).join("\n"))})' || true)"
+  if [ -z "$raw" ]; then
+    DEMAND=""; DEMAND_KNOWN=0
+  else
+    DEMAND="$(printf '%s\n' "$raw" | sed '1d')"; DEMAND_KNOWN=1
+  fi
   return 0
 }
 
@@ -398,10 +417,12 @@ features_subset() {
   return 0
 }
 
-# Does any demanded bundle fit inside this tier's features? Empty DEMAND ⇒ yes (degrade).
+# Does any demanded bundle fit inside this tier's features? An UNKNOWN demand ⇒ yes
+# (degrade to v7); a KNOWN-empty demand ⇒ no, there is nothing to wake for.
 tier_has_demand() {
   local tier="$1" feats line
-  [ -n "$DEMAND" ] || return 0
+  [ "${DEMAND_KNOWN:-0}" = "1" ] || return 0
+  [ -n "$DEMAND" ] || return 1
   feats="$(role_features "$tier")"
   [ -n "$feats" ] || return 1
   while IFS= read -r line; do
@@ -415,7 +436,8 @@ tier_has_demand() {
 # DEMAND ⇒ the configured pool size (degrade to v7).
 demand_count_for() {
   local tier="$1" feats line best=0 n
-  [ -n "$DEMAND" ] || { echo "$LOOP_POOL_SIZE"; return 0; }
+  [ "${DEMAND_KNOWN:-0}" = "1" ] || { echo "$LOOP_POOL_SIZE"; return 0; }
+  [ -n "$DEMAND" ] || { echo 0; return 0; }
   feats="$(role_features "$tier")"
   while IFS= read -r line; do
     [ -n "$line" ] || continue
@@ -436,8 +458,22 @@ demand_count_for() {
 
 # The one gate every spawn passes: live, demanded, not banned. Prints WHY when it declines,
 # so a quiet round is legible rather than mysterious.
+#
+# It RE-READS DEMAND on every call, and that is the point. Demand used to be sampled once at
+# the top of a round, so every tier in that round decided against the board as it looked
+# BEFORE any of them ran. With one pending task and four capable implementer tiers, the pool
+# claimed it and the three serial tiers still each spawned a model against a snapshot saying
+# work was waiting — then found nothing, because SKIP LOCKED had already given it away. Four
+# model loads for one task. The same staleness cost latency in the other direction: a task
+# the designer created in round 1 was invisible until round 2, and a task the pool advanced
+# to `reviewing` waited a whole round for a reviewer that could have run immediately.
+#
+# One GET against api.demand costs milliseconds; spawning a model costs seconds and tokens.
+# This stays a demand-SCALER, not a router (ADR 0024): it changes how many of a capability
+# to start, never which task goes to whom — the substrate still routes via SKIP LOCKED.
 should_spawn() {
   local tier="$1" round="${2:-}"
+  refresh_demand
   if ! tier_is_live "$tier"; then
     echo "→ round $round: SKIP '$tier' — backend unreachable (capability map)"; return 1
   fi
@@ -455,7 +491,8 @@ should_spawn() {
 # activation it already knows nothing can move — the D3 "predictive, no wasted fleet-spawn".
 has_serviceable_demand() {
   local line tier feats
-  [ -n "$DEMAND" ] || return 0
+  [ "${DEMAND_KNOWN:-0}" = "1" ] || return 0
+  [ -n "$DEMAND" ] || return 1
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     for tier in $(all_tiers); do

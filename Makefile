@@ -132,6 +132,12 @@ service-stop:
 service-status:
 	@node bin/ainarres.mjs service-status
 
+## Pin the demand gate (M27) with NO substrate: stub the CLI's `demand` feed and drive
+## should_spawn directly. Safe to run while a real service is up — it touches no docker,
+## no database, no ports.
+demand-gate-selftest:
+	@bash loop/demand-gate-selftest.sh
+
 ## Deterministic lifecycle test (MOCK): a fresh loop substrate + the standing service —
 ## idles empty, wakes on inserted work, drains, idles again, second activation with NO
 ## restart, graceful stop. This is M25's done-test (design/service.md).
