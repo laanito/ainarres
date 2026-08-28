@@ -46,13 +46,21 @@ the read-only delegated variant. `loop/roles.sh::mint_token <poller>` does the s
 *configured tier*; the seat is not a tier, so mint by hand. The family must be registered in
 `db/seed.sql` or every verb returns `not_eligible: unknown family` (ADR 0007).
 
-Your own token, when you need one by hand:
+Your own token comes from the **envelope** (v8 step 3), not from you:
+
+```bash
+make broker-serve                    # once; loopback:3021, writes loop/run/broker.psk
+TOK=$(ainarres seat-token --reason "working the intake middle")
+```
+
+The database decides its contents — the seat's provisioned features, `agent` or `monitor` only,
+capped TTL — and records the issuance. `ainarres refine` and `ainarres operator-log` ask the
+broker automatically and fall back to self-minting only when none is running. The hand-minted
+form still works and is visibly weaker; it lands in `api.unbrokered_operator_acts`:
 
 ```bash
 TOK=$(mint agent+operator lane:intake,role:intaker,lane:dev,role:designer,role:operator)
 ```
-
-`ainarres refine` and `ainarres operator-log` self-mint this for you — prefer them.
 
 ## Step 1 — open the brief (the intake channel)
 

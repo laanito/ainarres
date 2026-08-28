@@ -21,6 +21,7 @@ describe("domain tables", () => {
     "lanes",
     "operational_flags",
     "operator_actions",
+    "operator_credentials",
     "projects",
     "stages",
     "sweep_usage",

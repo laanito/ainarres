@@ -118,6 +118,13 @@ Do not grant it more. In particular:
 Those four prohibitions are asserted in `test/operator-seat.test.ts`, so a well-meant grant fails
 the suite rather than quietly widening the seat.
 
+**Provisioning is now load-bearing (v8 step 3).** The credential broker issues the seat's
+*provisioned* features — whatever `app.family_features` says, whole and unedited. So a grant here
+is no longer only a claim about what the seat may do; it is literally what its next token will
+carry. Two consequences: `make seed` after any change (the envelope reads the DB, not
+`roles.sh`), and the seat is identified by **holding `role:operator`**, so granting that feature
+to a second family seats a second operator. Do that only on purpose.
+
 ## Disabling a family
 
 - **Temporarily, without touching config:** `api.set_permanent_ban(family, capability, reason)`
