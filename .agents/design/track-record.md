@@ -64,6 +64,42 @@ privileged role (the driver already mints an `OVERSIGHT_TOKEN` and can mint `adm
 it is **append-only usage data with no capability effect** — a modest write, not a governance
 action.
 
+**D1 amendment (v8, 2026-08-28) — an empty sweep is not a free sweep.** As built, M20's verb
+resolved the charged task from the actor's last transition and, finding none, wrote **nothing**;
+the migration called that "the empty-sweep invariant, enforced in the substrate, not merely by
+driver discipline". The reasoning was that a sweep which moved no task had done nothing worth
+attributing. Measurement disproved it. In one real delivery, three implementer tiers woke after
+the pool had already claimed the only pending task, found nothing, and burned:
+
+| family | steps | tokens |
+| --- | --- | --- |
+| `opencode+nemotron-3-ultra` | 41 | 304,210 |
+| `opencode+muse-glimmer` | 20 | 140,323 |
+| `cursor-agent+composer-2.5` | 15 | 29,706 |
+
+~474k tokens — about **21% of that delivery's recorded cost** — spent discovering there was
+nothing to do, none of it recorded. An empty sweep costs a model load, a system prompt, a board
+read and a decision to stop. The invariant measured the wrong thing: not "was spend incurred"
+but "was a task moved".
+
+The blindness was also **biased**. It hid spend precisely where waste concentrates — redundant
+tiers, thrashing pools, a family that claims nothing all day — so the signal was quietest exactly
+when it should have been loudest, and the demand-gate fix that removes this waste (M27) could not
+be shown to work because the thing it saves was never counted.
+
+So task-less spend now lands in **`app.sweep_usage`**, its own append-only ledger, surfaced by
+`api.sweep_usage`. It is a LEDGER and not an event for the third time the same reason has applied:
+`app.events.task_id` is `NOT NULL`, and task-less spend has no task by definition (M22 D7, and the
+v8 operator action ledger). The task-anchored path is unchanged. Two constraints hold:
+
+- **It is never folded into `api.family_track_record`.** That view is per-(family, capability) and
+  spend with no task has no capability to attribute to; blending would contaminate a competence
+  signal with a cost one, which is exactly what **D3** exists to prevent. It is surfaced alongside.
+- **Attribution is still refused rather than guessed.** A sweep that never claimed has no agent
+  row, so the driver names the family — no weaker a claim than the number itself, which it has
+  always been trusted to assert. When neither the actor nor a named family resolves, the verb
+  refuses: an unattributable number is worse than a missing one, because it reads as somebody's.
+
 **D2 — The track record is a SQL view (`api.family_track_record`), not JS in the report.** M16
 and M19 put family attribution in `bin/ainarres.mjs` (`familyOfTransition`) because the
 *consumer* was the report. M20's ultimate consumer is **M21's ban rule, which runs in-DB** —

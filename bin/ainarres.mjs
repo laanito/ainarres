@@ -1429,6 +1429,11 @@ const COMMANDS = {
     if (values.sweep) payload.sweep_id = values.sweep;
     const body = { actor: values.actor, data: payload };
     if (values.task) body.task = values.task;
+    // v8: the family travels to the substrate now, not just to parseUsage. A sweep that
+    // claimed nothing has no task to charge and often no agent row either, so the family
+    // is the only attribution left — and that spend is real (three empty sweeps cost
+    // ~474k tokens in one measured run). Without it the verb can only drop the number.
+    if (values.family) body.family = values.family;
     return callVerb("record_usage", body, token);
   },
 };

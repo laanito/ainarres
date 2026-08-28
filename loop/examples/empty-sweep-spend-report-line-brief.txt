@@ -1,0 +1,98 @@
+Surface the SPEND THAT MOVED NOTHING in the END-OF-RUN REPORT: render api.sweep_usage in
+the track-record section, so the tokens a sweep burned without claiming a task are visible
+next to the tokens that delivered something.
+
+This is the REPORT-LINE half of v8's empty-sweep spend capture. The read-only view it reads
+(`api.sweep_usage`) ALREADY EXISTS ON MAIN (shipped separately, with the ledger table and
+the record_usage change). This slice ONLY renders those rows + wires the fetch. It applies
+NO consequence, touches NO auth path, adds NO DB migration — a PURE FORMATTER change plus a
+graceful fetch. It is fully SUBSTRATE-FREE to validate (a vitest unit test, no database).
+
+NOTE — this brief is SINGLE-USE: the run ships its task to `main`, so a re-run needs a
+fresh brief whose work isn't already on main.
+
+WHY IT MATTERS (context, not work): api.record_usage used to resolve the charged task from
+the actor's last transition and, finding none, write NOTHING — "the empty-sweep invariant".
+It assumed a sweep that moved no task cost nothing. In one measured run, three implementer
+tiers woke after the pool had already claimed the only pending task, found nothing, and
+burned ~474k tokens between them — about 21% of that delivery's recorded cost, all of it
+silently dropped. The blindness was biased: it hid spend exactly where waste concentrates.
+That spend now lands in its own ledger. This slice is what makes it readable.
+
+WHAT EXISTS TODAY (read before coding; do NOT change any of it):
+- bin/ainarres.mjs exports the PURE `formatReport({ board, timeline, trackRecord, governance,
+  auditFlags, governanceActions, spendAnomalies, operationalFlags, openBriefs, stuckTasks,
+  operatorActions }, { lane })`.
+- `reportJson(...)` mirrors the same inputs.
+- The `report` command fetches the views and passes rows in, degrading to [] on error
+  (see the `operator_actions` / `stuck_tasks` fetches — copy that shape exactly).
+- `fmtTokens(n)` already renders a token count as "1.3M" / "207.5k" / "unknown". USE IT.
+- The report has a section beginning
+  "family track record (competence · spend — kept separate; M20 signal, no consequence yet):"
+  which ends with the line
+  "  (spend is a separate signal — a token-heavy but passing family is expensive, not failing)"
+- `api.sweep_usage` — read-only, readable by oversight and monitor, ordered by tokens
+  DESCENDING. One row per family, already aggregated. Columns:
+    family (text), sweeps (int), tokens (bigint, may arrive as a STRING from PostgREST —
+    coerce with Number()), last_seen (timestamptz)
+
+THE FEATURE — ONE TASK (no DB migration; the view is already on main):
+
+1. Extend `formatReport`'s first argument with `sweepUsage = []` (EXACTLY as
+   `operatorActions` was added) and render it INSIDE the existing family-track-record
+   section, AFTER the per-family rows and BEFORE the closing "(spend is a separate signal
+   …)" line.
+
+2. Render nothing at all when `sweepUsage` is empty — no header, no placeholder. When it is
+   non-empty, a header line then one line per family, in the order the view returned them
+   (tokens descending — do NOT re-sort), capped at 10:
+     header:  "  spend that moved nothing (sweeps that claimed no task):"
+     row:     "  - <family>: <fmtTokens(tokens)> over <sweeps> sweep(s)"
+   Use the literal "sweep(s)". A null/empty family renders as "—".
+
+3. Add a TOTAL line immediately after the rows, summing tokens across ALL rows passed in
+   (before the 10-row cap):
+     "    total: <fmtTokens(total)> spent claiming nothing"
+
+4. Mirror it in `reportJson`: add a top-level `sweepSpend: { total, families }` where
+   `total` is the pre-cap token sum and `families` is `sweepUsage.slice(0, 10)` passed
+   through unchanged (the JSON shape stays dumb).
+
+5. Wire the `report` command to fetch `api.sweep_usage` (unfiltered; the view is already
+   ordered — no `order=` param) and pass it in as `sweepUsage`. Degrade to [] if the view
+   is absent or the request errors: a substrate without the view must still produce a full
+   report.
+
+ACCEPTANCE — add assertions to test/status-format.test.ts (the PURE formatReport suite).
+They must FAIL on current main (no sweep-spend rendering) and PASS after:
+- formatReport({}) does NOT contain "spend that moved nothing", and still renders every
+  existing section without throwing.
+- Given `sweepUsage: [{ family: 'opencode+nemotron-3-ultra', sweeps: 41, tokens: 304210 }]`,
+  the output contains "spend that moved nothing (sweeps that claimed no task):",
+  "- opencode+nemotron-3-ultra: 304.2k over 41 sweep(s)", and
+  "total: 304.2k spent claiming nothing".
+- Given two rows (304210 over 41, and 140323 over 20), the total line reads "444.5k".
+- `tokens` arriving as the STRING "304210" renders identically to the number 304210.
+- A row with `family: null` renders "- —:".
+- 12 rows render exactly 10 detail lines, and the total still covers all 12.
+- The "(spend is a separate signal …)" line still comes AFTER the new block.
+- reportJson({ sweepUsage: [{ family: 'f', sweeps: 2, tokens: 10 }] }).sweepSpend equals
+  { total: 10, families: [ …the one row… ] }.
+- reportJson({}).sweepSpend equals { total: 0, families: [] }.
+
+VALIDATE (substrate-free — the ONLY validate; needs NO database, NO docker, NO make, NO psql.
+Run it verbatim; it must fail on main and pass after your change):
+    npx vitest run test/status-format.test.ts
+
+CONSTRAINTS:
+- No DB migration. No new view. Do NOT modify api.sweep_usage or any view, and do NOT touch
+  api.record_usage or anything under db/.
+- Keep `formatReport` and `reportJson` pure and total (no fetching, no clock, never throw on
+  empty or partial input) — the `report` command does the fetch and passes rows in. Mirror
+  the `operatorActions` wiring precisely.
+- Do NOT merge this into the per-family track-record rows or into any competence figure.
+  Spend and competence are shown side by side and never blended (design/track-record.md D3):
+  a family that burned tokens claiming nothing is EXPENSIVE, not failing. No scoring, no
+  ban recommendation, no "worst offender" label.
+- Do NOT re-sort or re-aggregate; the view's order and grouping are the contract.
+- JavaScript only (bin/ainarres.mjs is ESM); tests are vitest in test/status-format.test.ts.

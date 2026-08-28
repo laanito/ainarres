@@ -8,9 +8,15 @@ import { mintToken } from "./helpers/mint";
 // new write path: a privileged verb that stamps a task's TOKEN spend into the event log
 // as a `type='usage'` event. Attribution is the WORKER's sub (→ its family); oversight
 // only asserts the number. Invariants under test: it writes to the actor's most-recent
-// transitioned task; a no-work actor writes NOTHING (the empty-sweep invariant, enforced
-// in-substrate); an unknown actor is refused; and only oversight may call it (an agent
-// token cannot write its own scorecard). Tokens only — no USD anywhere (D3).
+// transition; an unknown actor with a named task is refused; and only oversight may call
+// it (an agent token cannot write its own scorecard). Tokens only — no USD anywhere (D3).
+//
+// v8 AMENDMENT: the "empty-sweep invariant" — a no-work actor writes NOTHING — is GONE,
+// and the two tests below now pin what replaced it. It rested on the assumption that a
+// sweep which moved no task cost nothing. Measurement disproved that: three implementer
+// tiers waking to a board already claimed burned ~474k tokens in a single run, all of it
+// silently dropped by this verb. Task-less spend now lands in app.sweep_usage (it cannot
+// be an event — events.task_id is NOT NULL). See test/empty-sweep-spend.test.ts.
 
 const FAMILY = "opencode+qwen";
 
@@ -102,25 +108,33 @@ describe("api.record_usage", () => {
     expect(r.event.task_id).toBe(other);
   });
 
-  it("writes NOTHING for a no-work actor (empty-sweep invariant)", async () => {
+  it("writes no EVENT for a no-work actor, but no longer loses the spend (v8)", async () => {
     // An actor that exists (claim ran ensure_agent) but transitioned no task — exactly
     // what an empty sweep leaves behind. Seed the bare agent row directly.
+    // This used to return `no_work` and write nothing at all. It still writes no event —
+    // there is no task to anchor one to — but the tokens are now attributed to the
+    // actor's family in app.sweep_usage instead of vanishing.
     const sub = randomUUID();
     const r0 = exec(`insert into app.agents (id, family_id) values ('${sub}', '${familyId()}')`);
     expect(r0.ok).toBe(true);
 
     const r = await json(await rpc("record_usage", { token: oversight(), body: { actor: sub, data: USAGE } }));
     expect(r.ok).toBe(true);
-    expect(r.code).toBe("no_work");
-    expect(r.event).toBeNull();
+    expect(r.code).toBe("no_task_spend");
     const n = query<{ c: string }>(`select count(*)::text c from app.events where actor = '${sub}' and type = 'usage'`)[0].c;
     expect(n).toBe("0");
+    const s = query<{ c: string }>(`select count(*)::text c from app.sweep_usage where actor_sub = '${sub}'`)[0].c;
+    expect(s).toBe("1");
   });
 
-  it("refuses an unknown actor (no agent row → cannot attribute a family)", async () => {
+  it("refuses an unknown actor with no family either — spend must not be orphaned", async () => {
+    // The actor check moved to where it is needed: it still refuses when there is nothing
+    // to attribute to, but a sweep that never claimed (so never got an agent row) can now
+    // be charged to the family the driver names. An unattributable number is worse than a
+    // missing one, because it reads as somebody's.
     const r = await json(await rpc("record_usage", { token: oversight(), body: { actor: randomUUID(), data: USAGE } }));
     expect(r.ok).toBe(false);
-    expect(r.code).toBe("unknown_actor");
+    expect(r.code).toBe("unknown_family");
   });
 
   it("is oversight-only — an agent token cannot write its own scorecard", async () => {
