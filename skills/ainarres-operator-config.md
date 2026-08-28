@@ -25,7 +25,10 @@ Both must agree.
 - Keep the family roster (`db/seed.sql`) and the tier config (`loop/roles.sh`) in agreement.
 - Adjust seating when new models become available or when costs change.
 - Tune the live service knobs (below).
-- Keep the capability map used by demand-shaped scaling accurate — **v7.1 (M27) dependent**.
+- Keep the feature declarations honest — demand-shaped scaling (M27) reads them to decide which
+  tiers to wake, so an over-declared tier gets spawned for work it cannot do.
+- Log seating changes to the operator ledger (`ainarres operator-log`) — a seating change has no
+  task, so it cannot be an event.
 
 ## Seating a family (all five steps, in order)
 
@@ -67,16 +70,43 @@ a model that hallucinates tools holds a lease and makes zero progress (the 2026-
 - Per-tier model overrides: `OPENCODE_*_MODEL`, `CURSOR_IMPL_MODEL`, `CLAUDE_DESIGNER_MODEL`,
   `CLAUDE_REVIEWER_MODEL`, and the `*_CMD` invocation overrides.
 
-## v7.1 knobs (designed, NOT yet on main)
+## Demand-shaped scaling (M27 — shipped)
 
-Per `.agents/design/precise-service.md` (ADR 0026/0027):
+The service no longer wakes every configured tier on every activation. At start it probes each
+tier's backend (`build_capability_map`), then gates each spawn on `tier_has_demand` — live
+capability ∩ the bundles `api.demand` reports as actually waiting. Two consequences for you:
 
-- `build_capability_map` / `refresh_capability_map` — probe each configured tier's backend.
-- `tier_has_demand` — gate each spawn on live capability ∩ demanded bundles.
-- Push-wake (`LISTEN/NOTIFY`) settings, replacing idle polling.
+- **A feature you declare in `role_features` is a promise to be spawned for that bundle.** An
+  over-declared tier now costs tokens on work it cannot finish; an under-declared one is never
+  woken for work it could have done.
+- **Unserviceable demand is reported, with three distinct causes** (stderr, only when the
+  condition changes): no configured family provides the bundle (*seat one*), the family that
+  does is unreachable (*a backend is down — not a seating problem*), or the bundle rests on a
+  human-held capability (`LOOP_HUMAN_FEATURES` — `role:intaker`, `role:auditor`). The third is
+  **not** a seating gap: seating a family for it would dismantle the human boundary M22/M24
+  built on purpose.
 
-Until M27/M28 land, feature declarations still need to be honest for these to work later, but
-there is nothing to run and no push-wake to configure.
+Push-wake (`LISTEN/NOTIFY` instead of idle polling, ADR 0027) is **designed, not built**. The
+service still polls every `LOOP_IDLE_POLL_SECS`.
+
+## The operator seat (v8 / ADR 0028)
+
+`agent+operator` is a seated family like any other, and is registered in `db/seed.sql` the same
+way — it just is not a *tier* (no `role_family` / `harness_sweep` case, no tier list), because
+nothing spawns it. It holds `lane:intake` + `role:intaker` + `lane:dev` + `role:designer` +
+`role:operator`.
+
+Do not grant it more. In particular:
+
+- **`capability:integrate`** stays with the single integrator family. An operator that could
+  merge is the orchestrator this substrate exists to avoid.
+- **`role:auditor`** stays human and stays a *different identity*. An operator that can flag its
+  own gaps closes the oversight loop on itself.
+- **`role:implementer` / `role:reviewer` / `tier:2`** would make the seat claim delivery work. It
+  operates the machine; it is not a worker in it.
+
+Those four prohibitions are asserted in `test/operator-seat.test.ts`, so a well-meant grant fails
+the suite rather than quietly widening the seat.
 
 ## Disabling a family
 

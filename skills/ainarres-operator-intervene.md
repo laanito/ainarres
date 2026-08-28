@@ -3,6 +3,13 @@
 You are the **external operator**. You have the right (and responsibility) to take direct action
 on the substrate when the swarm cannot or should not handle something.
 
+**Act under your own name.** The operator seat is a registered family, `agent+operator` (v8 /
+ADR 0028). Use it for anything you do *as the operator*. It holds no `capability:integrate` and
+no `role:auditor` — you can never merge, and you are not the auditor. Two exceptions below
+genuinely require another family's identity (releasing another agent's stranded claim needs
+that agent's `sub`; the driver's own lane acts are the driver's) — those are impersonation with
+a reason, and the reason belongs in your ledger.
+
 **Token note.** The verbs split three ways, and you need a different token for each:
 
 - `release_task`, `block_task`, `advance_task`, `reject_task`, `report_progress` — granted to the
@@ -26,7 +33,8 @@ mint() {   # mint <family> <agent|oversight> <features> [sub]
 }
 ```
 
-`loop/roles.sh::mint_token <poller> [sub]` does the same for a configured tier.
+`loop/roles.sh::mint_token <poller> [sub]` does the same for a configured tier. Your own seat
+token: `mint agent+operator agent lane:intake,role:intaker,lane:dev,role:designer,role:operator`.
 
 ## When to intervene
 
@@ -74,7 +82,7 @@ be aware you are spending an attempt.
 **Blocked tasks.** `unblock_task` needs only `lane:<lane>`:
 
 ```bash
-TOK=$(mint loop+driver agent lane:dev)
+TOK=$(mint agent+operator agent lane:dev)
 node bin/ainarres.mjs unblock <task-id> --note "operator: dependency resolved" --token "$TOK"
 ```
 
@@ -83,10 +91,21 @@ node bin/ainarres.mjs unblock <task-id> --note "operator: dependency resolved" -
 
 ## Rules
 
-- **Document every intervention.** You cannot use `report_progress` for this — it requires a live
-  claim you do not hold. Instead: pass a real `p_reason` to the governance RPCs (it lands in the
-  `app.governance_actions` ledger), a `--reason` / `--note` to `release`/`unblock` (it lands as an
-  event), and record structural decisions in a commit message or ADR.
+- **Document every intervention** — and now there is a place for it. Pass a real `p_reason` to
+  the governance RPCs (it lands in the `app.governance_actions` ledger), a `--reason` / `--note`
+  to `release`/`unblock` (it lands as an event), and log the act itself:
+
+  ```bash
+  ainarres operator-log --action release_stranded --task <id>     --reason "worker dead, lease still live" --detail '{"as_family":"opencode+big-pickle"}'
+  ainarres operator-log --action service_stop --target "the standing service"
+  ```
+
+  This matters most for the two impersonations above: when you act as another family, the
+  substrate's event will name *them*, so the only record that it was really you is the ledger
+  line you write. Name the family you borrowed in `--detail`. Log the misses too — an
+  intervention that was refused or made things worse goes in with `--outcome refused|failed`.
+  You cannot use `report_progress` for any of this; it requires a live claim you do not hold.
+  Structural decisions still belong in a commit message or an ADR.
 - Prefer the lightest intervention possible. Waiting for lazy reclaim beats forcing a release.
 - Never use intervene to do the swarm's job.
 - After intervening, follow `skills/ainarres-operator-monitor.md` to confirm the system returned
