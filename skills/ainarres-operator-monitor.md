@@ -24,7 +24,7 @@ the substrate and the standing service without participating in the work pipelin
 - Oversight views, all shipped and readable by `monitor` and `oversight`: `board`, `feed`,
   `abandoned`, `timeline`, `governance_status`, `audit_flags`, `governance_actions`,
   `spend_anomalies`, `operational_flags`, `stuck_tasks`, `family_track_record`, `open_briefs`.
-- `api.demand` does **not** exist yet — **v7.1 (M27)**.
+- `api.demand` is live (M27 Slice A) and readable by `monitor`.
 - You may read the substrate directly with `psql` or PostgREST (you are outside the agent
   surface). **Read-only**: `select` only. No DDL, no `truncate`, no `make reset` / `dbmate` —
   see the 2026-07-04 board wipe.
@@ -34,8 +34,11 @@ the substrate and the standing service without participating in the work pipelin
 Run a monitoring pass on a regular cadence or on demand. Produce a concise report covering:
 
 1. **Demand and service behaviour**
-   - Current `api.demand` (which capability bundles have pending claimable work) — **v7.1 (M27) —
-     not yet built**.
+   - Current `api.demand` — which capability bundles have pending claimable work, and how many
+     tasks each. A bundle is what a family must hold to move such a task, so a bundle no seated
+     family satisfies is work nothing you run can do: report it as **Action required — seat a
+     family holding {bundle}**. (The service's own use of this to spawn only the needed tiers is
+     M27 Slice B.)
    - Whether the standing service is waking on push notifications or falling back to poll —
      **v7.1 (M28) — not yet built**. Today it always polls (`LOOP_IDLE_POLL_SECS`, default 15s).
    - Any `unserviceable-demand` signals and their cause (no configured family vs. backend down) —
@@ -84,7 +87,7 @@ Return a short, structured status:
 
 ```
 Status at <timestamp>
-- Demand: <summary of active bundles and counts> (v7.1 — not built)
+- Demand: <bundles with pending counts, or "none">
 - Unserviceable: <list or "none"> (v7.1 — not built)
 - Intake: <briefs parked in proposed_brief/briefed, or "none">
 - Blocked: <count + brief reason>
