@@ -226,6 +226,43 @@ M24 intake create. The intaker's dialog (the back-and-forth to shape the request
 still minimal: the endpoint accepts a request and the human refines the brief; a rich Customer↔
 Intaker conversation is a later slice (the honest limit v6 already recorded).
 
+### How the key is established (settles ADR 0025's open mechanism question)
+
+[ADR 0025](../decisions/0025-v7-security-posture-local-service.md) deliberately left the
+*mechanism* to this note — "local user management and/or a pre-shared key". The mechanism is a
+**PSK**, and (v8) the channel **establishes it itself** rather than demanding one:
+
+1. `INTAKE_PSK` if the owner supplies one, else
+2. the key already in `loop/run/intake.psk` — so a restart keeps configured clients working, else
+3. a fresh 32-byte key it generates.
+
+The key is always persisted to that file at mode 0600, which is where the client reads it. The
+ADR's requirement is *authenticated before a row exists*, and that is unchanged: there is
+**always** a key, generated is not absent, and an unauthenticated POST is refused at the channel
+with no row (asserted in `test/intake-cli.test.ts`). What v8 changed is only **who invents the
+key** — the owner no longer has to, and it never passes through a clipboard.
+
+### The operator's flow, end to end
+
+Three commands, and the middle step is the human's by design:
+
+```sh
+make intake-serve                            # the channel; establishes + persists its key
+ainarres intake --request "…"                # or --file PATH, or --file - for stdin
+ainarres refine <brief-id>                   # claim + advance proposed_brief → briefed
+```
+
+`refine` is the only human action in a request's life. It is not ergonomics that put it there:
+`proposed_brief → briefed` requires `role:intaker`, **no worker tier holds it**, and so the
+brief is simply not claimable by any agent until a person has shaped it (D5 of
+[`intake.md`](intake.md), enforced by the substrate, not by prompt discipline). From `briefed`
+onward the standing designer accepts the brief, decomposes it into `dev` tasks, and the swarm
+delivers — no further human action.
+
+The operator-facing detail of all three lives in
+[`skills/ainarres-operator-intake.md`](../../skills/ainarres-operator-intake.md), which is the
+interface an agent in the operator seat reads ([ADR 0028](../decisions/0028-v8-scope-the-agent-operator-seat.md)).
+
 ## Scope: driver/harness-side; substrate change expected to be ~zero
 
 Like M14 / M17 / M18, the standing service (M25) is a **driver + harness** change — the substrate

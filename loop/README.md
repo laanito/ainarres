@@ -159,16 +159,24 @@ identity** (`human+intaker`, holding only `lane:intake` + `role:intaker`), which
 service then decomposes and drains. Kept **local + light** per ADR 0025.
 
 ```sh
-INTAKE_PSK=<your-key> make intake-serve         # loopback:3020, targets the loop substrate
-# submit a request:
-curl -s -XPOST 127.0.0.1:3020/intake -H 'X-Intake-Key: <your-key>' \
-     -H 'Content-Type: application/json' -d '{"request":"add a foo widget"}'
-#   → 201 {"ok":true,"brief_id":"…","stage":"proposed_brief"}
+make intake-serve                               # loopback:3020, targets the loop substrate
+# submit a request (reads the key file; --file PATH or --file - also work):
+ainarres intake --request "add a foo widget"
+#   → brief 01a0…  stage=proposed_brief
+ainarres refine <brief-id>                      # the human intaker's step → briefed
 ```
 
+**The key needs no ceremony (v8).** The channel establishes its own: `INTAKE_PSK` if you set
+one, else the key already in `loop/run/intake.psk` (so a restart keeps configured clients
+working), else a fresh 32-byte key it generates. It always persists the key there at mode
+0600, which is where `ainarres intake` reads it — so the key is never carried between shells.
+There is **always** a key: generated is not absent, and an unauthenticated POST is still 401
+with no row. The raw `curl` form still works if you prefer it (`X-Intake-Key: $(cat
+loop/run/intake.psk)`).
+
 Security posture (ADR 0025 — deliberately light, first stage): binds **loopback only** (the
-server *refuses* to start on a non-loopback host), **PSK required** (refuses to start without
-one; constant-time compare), single-owner, no TLS / multi-tenant / rate-limiting (deferred with
+server *refuses* to start on a non-loopback host), **PSK always** (supplied or generated —
+never absent; constant-time compare), single-owner, no TLS / multi-tenant / rate-limiting (deferred with
 a written widening contract in ADR 0025). **Defence in depth:** the PSK is the outer wall; the
 **unchanged M24 two-tier create-gate** is the inner one — the channel's identity can open a
 brief but the substrate refuses it any dev create or merge, so a channel bug can't grant what

@@ -139,18 +139,24 @@ make service-status   # its liveness: idle | running | stalled | stopped
 make service-stop     # graceful drain-then-halt
 
 # feed it a request through the local, authenticated channel (first external ingress):
-INTAKE_PSK=<key> make intake-serve
-curl -s -XPOST 127.0.0.1:3020/intake -H "X-Intake-Key: <key>" \
-     -H 'Content-Type: application/json' -d '{"request":"add a foo widget"}'
+make intake-serve                       # establishes + persists its own key (loop/run/intake.psk, 0600)
+ainarres intake --request "add a foo widget"      # or --file path.txt, or --file - for stdin
+ainarres refine <brief-id>              # the human intaker's step: proposed_brief → briefed
 
 make loop-run BRIEF=path/to/brief.txt   # still here: a one-shot batch run (drain, then exit)
 ```
+
+Those three are the whole flow. `refine` is the one human step and it is deliberate: opening
+a brief is `role:intaker`'s, and **no worker holds it** — the substrate keeps refining a raw
+request with a person. From `briefed` onward the standing designer accepts the brief,
+decomposes it into `dev` work, and the swarm ships it with no further human action.
 
 The service is a **demand-scaler, never a router** — it ensures capacity when work is
 pending; the substrate still routes every task by `SKIP LOCKED` self-claim. The channel
 is **local + pre-shared-key** by design ([ADR 0025](.agents/decisions/0025-v7-security-posture-local-service.md));
 a request it admits can only *open a brief* — the substrate's own gate refuses it anything
-more. See [`loop/README.md`](loop/README.md) for the full run model.
+more. See [`loop/README.md`](loop/README.md) for the full run model, and
+[`skills/ainarres-operator-intake.md`](skills/ainarres-operator-intake.md) for the operator's.
 
 > A connection pooler (PgBouncer, transaction mode) sits in front of the writer in
 > any non-toy deployment — a herd of agents will otherwise exhaust Postgres'
