@@ -23,6 +23,7 @@ describe("domain tables", () => {
     "operator_actions",
     "projects",
     "stages",
+    "sweep_usage",
     "tasks",
     "transitions",
     "workflows",
