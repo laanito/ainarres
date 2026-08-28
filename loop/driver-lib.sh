@@ -421,8 +421,13 @@ features_subset() {
 # (degrade to v7); a KNOWN-empty demand ⇒ no, there is nothing to wake for.
 tier_has_demand() {
   local tier="$1" feats line
-  [ "${DEMAND_KNOWN:-0}" = "1" ] || return 0
-  [ -n "$DEMAND" ] || return 1
+  # A NON-EMPTY demand list is authoritative however it was set — DEMAND_KNOWN only has to
+  # disambiguate the empty case. Consulting it first made these helpers unusable with a
+  # hand-set DEMAND, which is exactly how service-selftest pins the classification.
+  if [ -z "$DEMAND" ]; then
+    if [ "${DEMAND_KNOWN:-0}" = "1" ]; then return 1; fi   # known-empty: nothing pending
+    return 0                                               # unknown: degrade to v7
+  fi
   feats="$(role_features "$tier")"
   [ -n "$feats" ] || return 1
   while IFS= read -r line; do
@@ -436,8 +441,10 @@ tier_has_demand() {
 # DEMAND ⇒ the configured pool size (degrade to v7).
 demand_count_for() {
   local tier="$1" feats line best=0 n
-  [ "${DEMAND_KNOWN:-0}" = "1" ] || { echo "$LOOP_POOL_SIZE"; return 0; }
-  [ -n "$DEMAND" ] || { echo 0; return 0; }
+  if [ -z "$DEMAND" ]; then
+    if [ "${DEMAND_KNOWN:-0}" = "1" ]; then echo 0; return 0; fi
+    echo "$LOOP_POOL_SIZE"; return 0
+  fi
   feats="$(role_features "$tier")"
   while IFS= read -r line; do
     [ -n "$line" ] || continue
@@ -491,8 +498,10 @@ should_spawn() {
 # activation it already knows nothing can move — the D3 "predictive, no wasted fleet-spawn".
 has_serviceable_demand() {
   local line tier feats
-  [ "${DEMAND_KNOWN:-0}" = "1" ] || return 0
-  [ -n "$DEMAND" ] || return 1
+  if [ -z "$DEMAND" ]; then
+    if [ "${DEMAND_KNOWN:-0}" = "1" ]; then return 1; fi
+    return 0
+  fi
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     for tier in $(all_tiers); do
