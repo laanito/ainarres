@@ -8,8 +8,11 @@
 #      step: the service burns one activation, makes no progress, and holds `stalled` rather
 #      than spinning); once refined to `briefed`, the standing designer accepts it, the dev
 #      tasks it decomposes into appear, and the board drains;
-#   5. CONSUME GOVERNANCE — a temp-banned family is skipped, the board still drains;
-#   6. GRACEFUL STOP — SIGTERM halts it cleanly (exit 0), status → `stopped`.
+#   5. DEMAND-SHAPED SCALING (v7.1/M27) — the service spawns only the tiers some pending
+#      task's capabilities ask for, sizes the implementer pool to the count waiting, and
+#      names UNSERVICEABLE demand predictively instead of spawning a fleet to discover it;
+#   6. CONSUME GOVERNANCE — a temp-banned family is skipped, the board still drains;
+#   7. GRACEFUL STOP — SIGTERM halts it cleanly (exit 0), status → `stopped`.
 #
 # Run via `make service-selftest` (which loop-resets first) with LOOP_MODE=mock. It does
 # NOT do real git/gh — the mock harness records references only (the loop substrate is a
@@ -49,9 +52,36 @@ mkdir -p "$RUN_DIR"
 rm -f "$STATUS"
 
 SVC_PID=""
-cleanup() { [ -n "$SVC_PID" ] && kill -KILL "$SVC_PID" 2>/dev/null || true; }
+# The pid of THIS shell (bash 3.2 has no $BASHPID, and $$ is inherited unchanged by
+# subshells, so it cannot tell them apart — this can).
+# `exec sh` REPLACES the substitution's fork, so $PPID is the pid of the shell that ran it:
+# in the main shell that equals $$; inside any subshell it does not (while $$ itself is
+# inherited unchanged, which is why $$ alone cannot tell them apart in bash 3.2).
+shell_pid() { exec sh -c 'echo $PPID'; }
+# Kill the supervisor only when the MAIN shell exits. bash 3.2 runs an EXIT trap inside a
+# subshell that dies — a pipeline stage killed by SIGPIPE, for instance — and $$ still reads
+# as the parent there. That cost hours: `printf … | grep -q` in phase 5a SIGPIPE'd its
+# printf, the trap fired in that subshell, killed the service, and the run carried on
+# against a dead supervisor. Phase 5a passed, phase 6 failed, and the supervisor looked like
+# it had mysteriously hung.
+cleanup() {
+  [ "$(shell_pid)" = "$$" ] || return 0
+  [ -n "$SVC_PID" ] && kill -KILL "$SVC_PID" 2>/dev/null || true
+}
 trap cleanup EXIT
-fail() { echo "✗ service-selftest: $*" >&2; echo "── last 30 service log lines ──" >&2; tail -30 "$SVC_LOG" >&2 2>/dev/null || true; exit 1; }
+fail() {
+  echo "✗ service-selftest: $*" >&2
+  # The supervisor's own state at the moment of failure. Without this a dead or wedged
+  # service looks identical to a service that simply disagreed with the assertion, and the
+  # two need completely different debugging.
+  if [ -n "${SVC_PID:-}" ]; then
+    echo "── supervisor: pid=$SVC_PID stat=$(ps -o stat= -p "$SVC_PID" 2>/dev/null || echo GONE) ──" >&2
+    echo "── status file: state=$(svc_field state) active=$(svc_field active) activation=$(svc_field activation) last_tick=$(svc_field last_tick) (now $(date -u +%H:%M:%SZ)) ──" >&2
+  fi
+  echo "── last 30 service log lines ──" >&2
+  tail -30 "$SVC_LOG" >&2 2>/dev/null || true
+  exit 1
+}
 pass() { echo "  ✓ $*"; }
 
 # ── small JSON readers ────────────────────────────────────────────────────────
@@ -132,7 +162,11 @@ GOV_BANNED=""   # reset for the live service (it manages its own)
 pass "Phase 0 — skip_if_banned matches on (family, capability): banned tier skipped, others proceed, empty set never skips"
 
 # ── Start the standing service in the background ──────────────────────────────
-bash "$HERE/service.sh" >"$SVC_LOG" 2>&1 &
+# </dev/null on purpose: a background supervisor must not share the harness's stdin. This
+# selftest also runs `docker compose exec -T` (loop_psql), which ATTACHES to that same stdin
+# — and the service died the moment it did, with no ERR trap, no EXIT trap and no failing
+# command: a signal, not a fault. A daemon owning its own stdin is correct anyway.
+bash "$HERE/service.sh" >"$SVC_LOG" 2>&1 </dev/null &
 SVC_PID=$!
 echo "→ service-selftest: started service pid=$SVC_PID"
 
@@ -167,20 +201,27 @@ pass "Phase 3 — second activation (#$(svc_field activation)) on the SAME proce
 
 # ── Phase 4: THE INTAKE BRIDGE (v8 step 1) ────────────────────────────────────
 # 4a — an UNREFINED brief is the human intaker's work, and the substrate keeps it that way:
-# proposed_brief→briefed needs role:intaker, which no tier holds, so the designer cannot
-# claim it. The service therefore burns exactly ONE activation, makes no progress, and
-# holds `stalled` (D3) instead of spinning — quiescent, not busy.
+# proposed_brief→briefed needs role:intaker, which no tier holds. Since M27 the service does
+# not have to SPAWN to discover that: api.demand reports the bundle {lane:intake,
+# role:intaker}, no live tier satisfies it, and role:intaker is declared human-held
+# (roles.sh::LOOP_HUMAN_FEATURES) — so the service names it "awaiting a human", holds, and
+# burns NO activation at all. (Before M27 it spent one activation reaching `stalled`.)
 dev_before="$(n_total)"
+brief_activation="$(svc_field activation)"
 brief_id="$(open_brief)"
 [ -n "$brief_id" ] || fail "could not open a brief on the intake lane"
-echo "→ service-selftest: opened brief $brief_id at proposed_brief — expecting the service to LEAVE IT ALONE…"
-wait_until 40 is_state stalled \
-  || fail "service did not settle into 'stalled' beside an unrefined brief (state='$(svc_field state)')"
+echo "→ service-selftest: opened brief $brief_id at proposed_brief — expecting a named hold, no activation…"
+awaiting_human() { case "$(svc_field note)" in *"awaiting a human"*) return 0 ;; *) return 1 ;; esac; }
+wait_until 40 awaiting_human \
+  || fail "service did not report 'awaiting a human' beside an unrefined brief (note='$(svc_field note)')"
+grep -q 'role:intaker' "$SVC_LOG" || fail "the hold did not name the human-held capability"
+[ "$(svc_field activation)" = "$brief_activation" ] \
+  || fail "service burned an activation ($brief_activation → $(svc_field activation)) on work only a human can move"
 [ "$(intake_stage_of "$brief_id")" = "proposed_brief" ] \
   || fail "the unrefined brief moved (stage='$(intake_stage_of "$brief_id")') — refining is the human's step"
 [ "$(n_total)" -eq "$dev_before" ] \
   || fail "the service created dev work from an unrefined brief (dev total $(n_total) != $dev_before)"
-pass "Phase 4a — left the unrefined brief at proposed_brief, created no dev work, held 'stalled' (no spin)"
+pass "Phase 4a — named the unrefined brief 'awaiting a human' (role:intaker), spawned nothing, burned no activation"
 
 # 4b — the human refines it. The board signature changes, so the service resumes: the
 # standing designer claims the `briefed` brief, creates the dev tasks, and accepts it LAST.
@@ -198,7 +239,88 @@ wait_until 120 board_all_done \
 wait_until 15 is_state idle || fail "service did not return to idle after the intake drain"
 pass "Phase 4b — refined brief accepted by the designer, $(( $(n_total) - dev_before )) dev task(s) created and drained to done"
 
-# ── Phase 5: CONSUME GOVERNANCE — skip a temp-banned family (D6) ──────────────
+# ── Phase 5: DEMAND-SHAPED SCALING (v7.1 · ADR 0026) ──────────────────────────
+# 5a — ONE task waiting at `implementing`. Its bundle is {lane:dev, role:implementer}, which
+# only the implementer tiers satisfy, so the designer and the frontier peers must NOT be
+# spawned this round — and the pool must size to the ONE task waiting, not fan out to three.
+# This is the token bill v7 was paying: a full fleet spawn for a single task.
+demand_activation="$(svc_field activation)"
+loop_psql -c "
+  insert into app.tasks (lane_id, stage, payload)
+  select l.id, s.id, '{\"goal\":\"m27 demand: implementer only\",\"validate\":\"true\"}'::jsonb
+  from app.lanes l join app.stages s on s.workflow_id = l.workflow_id
+  where l.key = 'dev' and s.key = 'implementing';" >/dev/null || fail "could not insert the implementing task"
+echo "→ service-selftest: one task at implementing — expecting ONLY implementer tiers, pool of 1…"
+wait_until 120 board_all_done || fail "the single implementing task did not drain (active=$(n_active))"
+wait_until 15 is_state idle   || fail "service did not return to idle after the demand-shaped drain"
+
+svc_since() { awk -v n="$1" 'BEGIN{c=0} /activation #/{c++} c>=n' "$SVC_LOG"; }
+demand_log="$(svc_since "$((demand_activation + 1))")"
+# Here-strings, not `printf … | grep -q`: a `-q` reader exits at the first match and
+# SIGPIPEs the writer — see the cleanup guard above for what that cost.
+grep -q "1 concurrent 'cheap-implementer' implementers (cap ${LOOP_POOL_SIZE:-3})" <<< "$demand_log" \
+  || fail "pool did not size to demand — expected 1 implementer"
+grep -q "SKIP 'designer' — no pending work needs its capabilities" <<< "$demand_log" \
+  || fail "the designer was spawned with no design work pending (demand gate did not hold)"
+pass "Phase 5a — spawned only the implementer tiers, pool sized to the 1 task waiting (designer skipped)"
+
+# 5b — UNSERVICEABLE demand, checked the way Phase 0 checks skip_if_banned: by driving the
+# classifier directly. Demand nothing seated can serve must be named, with the RIGHT cause,
+# and must never be spawned against.
+#
+# Pure on purpose. The obvious alternative — put such a task on the live board and watch the
+# running service — needs a second supervisor or a long wait, and a second supervisor
+# sharing $RUN_DIR destabilises the first (they share teardown: worktree gc, the xdg tree).
+# The live half of this property is already proven by 5a (only demanded tiers spawn) and by
+# 4a (a bundle no worker can serve is named and NOT activated against). What is left to pin
+# is the classification, and that is a pure function of DEMAND × the capability map.
+demand_before="$DEMAND"; capmap_before="$CAPMAP_DOWN"
+
+# (i) a capability no configured family holds → "seat one"
+DEMAND="2|lane:dev,role:implementer,tier:selftest-unseated"
+CAPMAP_DOWN=""; UNSERVICEABLE_LOGGED="x"
+compute_unserviceable 2>/dev/null
+case "$UNSERVICEABLE" in
+  *"no configured family provides it"*) ;;
+  *) fail "unseated capability not classified as 'seat one' (got: $UNSERVICEABLE)" ;;
+esac
+has_serviceable_demand && fail "a bundle no tier satisfies must not count as serviceable"
+
+# (ii) the same bundle, but a tier DOES provide it and is merely down → "backend unreachable"
+DEMAND="1|lane:dev,role:implementer"
+CAPMAP_DOWN="$(printf '%s\n' "cheap-implementer|test" "muse-implementer|test" "cursor-implementer|test" "fallback-implementer|test")"
+UNSERVICEABLE_LOGGED="x"
+compute_unserviceable 2>/dev/null
+case "$UNSERVICEABLE" in
+  *"is unreachable"*) ;;
+  *) fail "a down-but-configured family was not classified as unreachable (got: $UNSERVICEABLE)" ;;
+esac
+tier_has_demand cheap-implementer || fail "demand matching must not depend on liveness (that is should_spawn's job)"
+should_spawn cheap-implementer 9 >/dev/null && fail "should_spawn must refuse a tier whose backend is down"
+
+# (iii) a HUMAN-held capability → "awaiting a human", never "seat one"
+DEMAND="1|lane:intake,role:intaker"
+CAPMAP_DOWN=""; UNSERVICEABLE_LOGGED="x"
+compute_unserviceable 2>/dev/null
+case "$UNSERVICEABLE" in
+  *"awaiting a human"*) ;;
+  *) fail "a human-held capability must read as 'awaiting a human' (got: $UNSERVICEABLE)" ;;
+esac
+case "$UNSERVICEABLE" in
+  *"seat one"*) fail "a human-held capability must NEVER advise seating a family" ;;
+esac
+
+# (iv) demand a live tier serves → nothing unserviceable at all
+DEMAND="1|lane:dev,role:implementer"
+CAPMAP_DOWN=""; UNSERVICEABLE_LOGGED="x"
+compute_unserviceable 2>/dev/null
+[ -z "$UNSERVICEABLE" ] || fail "serviceable demand must not be reported unserviceable (got: $UNSERVICEABLE)"
+has_serviceable_demand || fail "a bundle a live tier satisfies must count as serviceable"
+
+DEMAND="$demand_before"; CAPMAP_DOWN="$capmap_before"; UNSERVICEABLE=""; UNSERVICEABLE_LOGGED=""
+pass "Phase 5b — classified unserviceable demand three ways (unseated · backend down · awaiting a human) and never against live capacity"
+
+# ── Phase 6: CONSUME GOVERNANCE — skip a temp-banned family (D6) ──────────────
 # Temp-ban the pool family (opencode+big-pickle) for role:implementer in the LOOP
 # substrate, insert work, and assert the running service SKIPS the pool tier (log line)
 # yet still DRAINS — the other (unbanned) implementer tiers pick the work up.
@@ -221,7 +343,9 @@ create_tasks "$LOOP_MOCK_TASKS"
 echo "→ service-selftest: inserted work under the ban — expecting a pool SKIP + drain via other tiers…"
 wait_until 120 board_all_done || fail "board did not drain while the pool family was banned (active=$(n_active), terminal=$(n_terminal)/$(n_total))"
 wait_until 15 is_state idle || fail "service did not return to idle after the banned-run drain"
-grep -q "SKIP pool tier 'cheap-implementer' — family banned" "$SVC_LOG" \
+# M27 unified every spawn decision behind should_spawn, so the message no longer says
+# "pool tier" — one gate, one line shape, whatever the reason (banned / no demand / down).
+grep -q "SKIP 'cheap-implementer' — family banned" "$SVC_LOG" \
   || fail "service did not log skipping the temp-banned pool family (expected a SKIP line in $SVC_LOG)"
 [ "$(svc_field activation)" -gt "$banned_activation" ] || fail "the banned-run did not trigger a new activation"
 # Clear the ban so it doesn't linger.
@@ -229,9 +353,9 @@ loop_psql -c "
   delete from app.feature_denials where family_id = (select id from app.agent_families where key='opencode+big-pickle') and feature_id = (select id from app.features where name='role:implementer');
   delete from app.governance_strikes where family_id = (select id from app.agent_families where key='opencode+big-pickle') and feature_id = (select id from app.features where name='role:implementer');
 " >/dev/null || true
-pass "Phase 5 — consumed governance: SKIPPED the temp-banned pool family, drained via the other tiers"
+pass "Phase 6 — consumed governance: SKIPPED the temp-banned pool family, drained via the other tiers"
 
-# ── Phase 6: GRACEFUL STOP ────────────────────────────────────────────────────
+# ── Phase 7: GRACEFUL STOP ────────────────────────────────────────────────────
 echo "→ service-selftest: sending SIGTERM (graceful stop)…"
 kill -TERM "$SVC_PID"
 wait_until 20 bash -c '! kill -0 '"$SVC_PID"' 2>/dev/null' || fail "service did not exit within 20s of SIGTERM"
@@ -239,6 +363,6 @@ svc_rc=0; wait "$SVC_PID" 2>/dev/null || svc_rc=$?
 [ "$svc_rc" -eq 0 ] || fail "service exited non-zero on graceful stop (rc=$svc_rc)"
 [ "$(svc_field state)" = "stopped" ] || fail "status file not marked 'stopped' after stop (state='$(svc_field state)')"
 SVC_PID=""   # reaped; don't let cleanup kill an unrelated pid
-pass "Phase 6 — SIGTERM drained + halted cleanly (exit 0, state=stopped)"
+pass "Phase 7 — SIGTERM drained + halted cleanly (exit 0, state=stopped)"
 
 echo "✓ service-selftest: standing service lifecycle PASSED (idle → wake → drain → idle → second activation → clean stop)."

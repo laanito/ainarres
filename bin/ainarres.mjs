@@ -1095,6 +1095,14 @@ const COMMANDS = {
   // state (banned/permanent/heal_at/…). Oversight-only view; needs an oversight token.
   // Used by the standing service to CONSUME governance (loop/driver-lib.sh::skip_if_banned
   // — don't spawn a temp-banned family), and handy for the owner directly.
+  // M27 (v7.1 / ADR 0026): pending work in capability terms. The service reads this to
+  // spawn only the tiers some waiting task needs; an operator reads it to see whether any
+  // demanded bundle has no seated family at all.
+  async demand(rest, values, token) {
+    const r = await restGet("demand", token);
+    emit(r.body, r.httpOk);
+  },
+
   async "governance-status"(rest, values, token) {
     const r = await restGet(`governance_status?order=family.asc,capability.asc`, token);
     emit(r.body, r.httpOk);
@@ -1287,6 +1295,7 @@ const OPTS = {
   board: { lane: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
   feed: { lane: { type: "string" }, task: { type: "string" }, limit: { type: "string" }, token: { type: "string" } },
   abandoned: { lane: { type: "string" }, token: { type: "string" } },
+  demand: { token: { type: "string" } },
   "governance-status": { token: { type: "string" } },
   "service-status": { file: { type: "string" } },
   status: { lane: { type: "string" }, limit: { type: "string" }, watch: { type: "boolean" }, interval: { type: "string" }, compact: { type: "boolean" }, json: { type: "boolean" }, token: { type: "string" } },
@@ -1317,6 +1326,7 @@ const USAGE = `ainarres — agent CLI (verbs over PostgREST)
   refine  [<brief-id>] [--note T] [--lane intake] [--family human+intaker]
             the intaker's step: claim a brief and advance it to 'briefed' (self-mints the intaker token)
   board | feed | abandoned [--lane L] [--task UUID] [--limit N]
+  demand              v7.1 pending work by required-capability bundle (what to wake) — oversight/monitor token
   governance-status   v5 governance state (banned/permanent/heal_at) per (family, capability) — oversight token
   status  [--lane L] [--limit N] [--watch [--interval 2]]   one-glance oversight summary (board + active + abandoned + why-stuck)
   service-status  [--file PATH]   v7 standing-service liveness readout (reads loop/run/service.status; no token/network)

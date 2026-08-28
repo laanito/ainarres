@@ -35,47 +35,70 @@ ai() { "${AINARRES[@]}" "$@"; }
 # demand gate — which is exactly why the service adds `intake`.
 # Returns 1 if ANY lane read failed, so a caller can tell "unreachable" from "drained"
 # (the 2026-07-04 board-wipe lesson: a failed read must never look like an empty board).
+# Collect through a TEMP FILE, never a nested pipeline. The obvious shape —
+#   out="$(ai board …)"        … then …        printf '%s' "$buf" | node -e …
+# put a command substitution and a pipeline inside a function that its callers ALSO pipe
+# into node (counts/board_total/board_sig all do `board_rows | node`). That nesting made the
+# supervisor hang INTERMITTENTLY after an activation: a command substitution or pipe stage
+# waits for EOF, EOF needs every write end closed, and any process that inherited one — a
+# grandchild of a `node` invocation, a straggler from the round just finished — holds it
+# open. When it happened the service stopped ticking entirely while still alive: no crash,
+# no log line, just a supervisor that never looks at the board again. For an unattended
+# process that is the worst failure shape there is.
+#
+# Redirect-to-file has no EOF handshake, so the class cannot occur. The cost is one temp
+# file per board read; the benefit is a poll loop that cannot wedge.
 board_rows() {
-  local lane out rc=0 buf=""
+  local lane rc=0
+  : > "$BOARD_RAW"
   for lane in "${LOOP_LANES[@]}"; do
-    if out="$(ai board --lane "$lane" --token "$OVERSIGHT_TOKEN" 2>/dev/null)"; then
-      buf="$buf$out
-"
+    if ai board --lane "$lane" --token "$OVERSIGHT_TOKEN" >>"$BOARD_RAW" 2>/dev/null; then
+      printf '\n' >>"$BOARD_RAW"
     else
       rc=1
     fi
   done
-  printf '%s' "$buf" \
-    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const rows=[];for(const line of s.split("\n")){const t=line.trim();if(!t)continue;let r;try{r=JSON.parse(t)}catch{continue}if(Array.isArray(r))rows.push(...r)}process.stdout.write(JSON.stringify(rows))})'
+  node -e 'const fs=require("fs");const rows=[];for(const line of fs.readFileSync(process.argv[1],"utf8").split("\n")){const t=line.trim();if(!t)continue;let r;try{r=JSON.parse(t)}catch{continue}if(Array.isArray(r))rows.push(...r)}fs.writeFileSync(process.argv[2],JSON.stringify(rows))' \
+    "$BOARD_RAW" "$BOARD_JSON" 2>/dev/null || { echo "[]" > "$BOARD_JSON"; rc=1; }
   return "$rc"
 }
 
-# active+blocked counts across the worked lanes, straight from the board view. Prints "A B".
+# One board read per tick, through FILES — no pipelines, no command substitution around a
+# pipeline, anywhere in the poll loop.
+#
+# WHY THIS SHAPE. The obvious bash idiom is `x="$(fn)"` where `fn` ends in `… | node`. Both
+# halves are EOF handshakes: the substitution waits for every write end of its pipe to close,
+# and so does each pipe stage. Any process that inherited one holds it open — a grandchild of
+# a node invocation, a straggler from the round just finished. When that happened here the
+# supervisor STOPPED TICKING while still alive: no crash, no log line, no status update, just
+# a process that never looks at the board again. Intermittent, and invisible until you notice
+# nothing has moved for an hour. For an unattended service that is the worst failure shape
+# there is, so the construct is gone rather than tuned.
+#
+# It is also cheaper: the tick used to fetch the board THREE times (counts, board_total,
+# board_sig) and start three node processes. Now it fetches once and each reader parses the
+# same snapshot file.
+board_refresh() {
+  board_rows
+}
+
+# active + blocked counts from the current snapshot. Prints "A B".
 counts() {
-  board_rows \
-    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{r=[]} if(!Array.isArray(r))r=[]; const a=r.filter(x=>!x.is_terminal&&!x.blocked).length; const b=r.filter(x=>x.blocked).length; process.stdout.write(a+" "+b)})'
+  node -e 'const fs=require("fs");let r=[];try{r=JSON.parse(fs.readFileSync(process.argv[1],"utf8"))}catch{r=[]};if(!Array.isArray(r))r=[];const a=r.filter(x=>!x.is_terminal&&!x.blocked).length;const b=r.filter(x=>x.blocked).length;process.stdout.write(a+" "+b)' "$BOARD_JSON" 2>/dev/null || echo "0 0"
 }
 
-# Total tasks on the board + whether the board was REACHABLE. Prints "N R": N = total
-# task rows (terminal ones included — a genuinely drained board still shows its `done`
-# tasks), R = 1 if the board view responded (even empty), 0 if the call failed. Lets a
-# caller tell "legitimately drained" from "wiped/unreachable" (the 2026-07-04 board-wipe):
-# counts() alone reads 0 active/0 blocked for BOTH.
+# Total rows + whether the read SUCCEEDED. Prints "N R" (R=0 ⇒ unreachable, never "drained").
 board_total() {
-  local out rc
-  out="$(board_rows)"; rc=$?
+  local rc=0
+  board_refresh || rc=1
   if [ "$rc" -ne 0 ]; then echo "0 0"; return; fi
-  printf '%s' "$out" \
-    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{r=[]} if(!Array.isArray(r))r=[]; process.stdout.write(r.length+" 1")})'
+  node -e 'const fs=require("fs");let r=[];try{r=JSON.parse(fs.readFileSync(process.argv[1],"utf8"))}catch{r=[]};if(!Array.isArray(r))r=[];process.stdout.write(r.length+" 1")' "$BOARD_JSON" 2>/dev/null || echo "0 0"
 }
 
-# A stable signature of the board (task → stage/blocked). If a full round leaves this
-# unchanged, no tier moved anything → the board is stuck (the batch driver stops; the
-# service enters its `stalled` state and waits for the signature to change — a human
-# intervening — design/service.md D3).
+# A stable signature of the snapshot (task → stage/blocked): unchanged after a full round
+# ⇒ nothing moved.
 board_sig() {
-  board_rows \
-    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{r=[]} if(!Array.isArray(r))r=[]; process.stdout.write(r.map(x=>x.task_id+":"+x.stage+":"+(x.blocked?"b":"")).sort().join("|"))})'
+  node -e 'const fs=require("fs");let r=[];try{r=JSON.parse(fs.readFileSync(process.argv[1],"utf8"))}catch{r=[]};if(!Array.isArray(r))r=[];process.stdout.write(r.map(x=>x.task_id+":"+x.stage+":"+(x.blocked?"b":"")).sort().join("|"))' "$BOARD_JSON" 2>/dev/null || true
 }
 
 # ── Teardown (shared; each entry point wires its OWN trap to call stop_active) ─
@@ -114,6 +137,7 @@ stop_active() {
   # Per-sweep opencode state (M18): each implementer sweep parks its private
   # XDG_DATA_HOME under $RUN_DIR/xdg/<sweep>. Clear the tree here. Best-effort.
   rm -rf "$RUN_DIR/xdg" >/dev/null 2>&1 || true
+  rm -f "$BOARD_RAW" "$BOARD_JSON" >/dev/null 2>&1 || true
 }
 
 # If a finished sweep left a task claimed (it stopped without advancing OR releasing —
@@ -123,8 +147,8 @@ stop_active() {
 # release bumps `attempts`, which feeds M12 escalation — exactly the right effect.
 release_stranded() {
   local sub="$1" tok="$2" held
-  held="$(board_rows \
-    | node -e 'let s="";const sub=process.argv[1];process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{r=[]};if(!Array.isArray(r))r=[];const t=r.find(x=>x.claimed_by===sub&&!x.is_terminal);process.stdout.write(t?t.task_id:"")})' "$sub")"
+  board_refresh
+  held="$(node -e 'const fs=require("fs");const sub=process.argv[2];let r=[];try{r=JSON.parse(fs.readFileSync(process.argv[1],"utf8"))}catch{r=[]};if(!Array.isArray(r))r=[];const t=r.find(x=>x.claimed_by===sub&&!x.is_terminal);process.stdout.write(t?t.task_id:"")' "$BOARD_JSON" "$sub")"
   if [ -n "$held" ]; then
     echo "  ↳ tier left $held claimed without advancing — releasing it for the next tier."
     ai release "$held" --reason "worker sweep ended without advancing or releasing (stranded)" --token "$tok" >/dev/null 2>&1 || true
@@ -264,6 +288,253 @@ skip_if_banned() {
   return 1
 }
 
+# Where each tick's board snapshot lands (raw concatenation + merged JSON), keyed by PID.
+# Per-process on purpose: a fixed path is shared state between any two runtimes pointed at
+# the same RUN_DIR — a service and a batch driver, or two services — and then one reads a
+# snapshot the other took. That produced a board read of "0 active" while three tasks sat at
+# `proposed`, which the service correctly (and uselessly) treated as drained.
+BOARD_RAW="${RUN_DIR:-/tmp}/.board-raw.$$.json"
+BOARD_JSON="${RUN_DIR:-/tmp}/.board.$$.json"
+
+# ── M27: demand-shaped scaling (v7.1 · ADR 0026 · design/precise-service.md D2) ──
+# v7 spawned EVERY configured tier whenever the board had any claimable task at all: one
+# task at `reviewing` booted the whole implementer pool, a process start and a model session
+# each, for workers that would find nothing to claim. Every one of those was paid in tokens.
+#
+# The fix has two halves that meet here. The substrate says WHAT IS WAITING, in capability
+# terms only (api.demand — bundles + counts, no task, no worker, no tier). The service says
+# WHAT IT CAN RUN (roles.sh::role_features, filtered to backends that answer). A tier is
+# spawned iff some demanded bundle ⊆ its features, it is live, and it is not banned.
+#
+# THE BRIGHT LINE (ADR 0026 / vision): this reads counts by capability bundle — never a
+# task's id, priority, subject or content, and never to pick a winner among capable families.
+# Tiers still self-claim via SKIP LOCKED. The service decides only WHICH KINDS of live worker
+# to launch. The moment it reads task content to prefer one capable family over another, it
+# is routing, and routing is the orchestrator this project exists to abolish.
+#
+# EVERY PART DEGRADES TO SPAWN-ANYWAY. Demand unreadable (view absent, request failed) ⇒
+# every live tier counts as demanded. Probe unavailable ⇒ the tier counts as live. Either
+# outage collapses to v7's coarse gate: an outage changes cost, never correctness.
+#
+# Bash 3.2 (macOS) has no associative arrays, so both maps are newline-delimited strings.
+LOOP_CONSUME_DEMAND="${LOOP_CONSUME_DEMAND:-1}"   # 0 = v7 behaviour (spawn every tier)
+CAPMAP_DOWN=""      # newline-separated "tier|why"
+DEMAND=""           # newline-separated "count|feat,feat,…"  (bundle features sorted)
+UNSERVICEABLE=""    # newline-separated "count|feat,feat,…|cause"
+UNSERVICEABLE_LOGGED=""   # what we last said out loud, so a standing condition is said ONCE
+
+# Every tier this run could spawn, deduped, in no particular order.
+all_tiers() {
+  printf '%s\n' "${LOOP_DESIGN_TIERS[@]:-}" "${LOOP_PRE_TIERS[@]:-}" "$LOOP_POOL_TIER" \
+                 "${LOOP_SERIAL_TIERS[@]:-}" "${LOOP_FRONTIER_PEERS[@]:-}" \
+    | awk 'NF && !seen[$0]++'
+}
+
+tier_is_live() {
+  printf '%s\n' "$CAPMAP_DOWN" | grep -q "^$1|" && return 1
+  return 0
+}
+
+# Mark a tier unreachable until the next re-probe. Called when a sweep EXITS NON-ZERO —
+# which is how a retired CLOUD model gets caught (the probe can only see local reachability;
+# qwen3-coder-next answered 410 on every activation for six weeks and was spawned every time).
+mark_tier_down() {
+  local tier="$1" why="${2:-sweep exited non-zero}"
+  tier_is_live "$tier" || return 0
+  CAPMAP_DOWN="$(printf '%s\n%s' "$CAPMAP_DOWN" "$tier|$why" | awk 'NF')"
+  echo "  ↳ capability map: '$tier' marked DOWN ($why) — not spawned again until re-probe"
+}
+
+# Probe every configured tier once, at start. Best-effort and timeboxed inside tier_probe;
+# an unknown answer means LIVE.
+build_capability_map() {
+  local tier down=""
+  CAPMAP_DOWN=""
+  for tier in $(all_tiers); do
+    tier_probe "$tier" || down="$(printf '%s\n%s' "$down" "$tier|backend unreachable at start" | awk 'NF')"
+  done
+  CAPMAP_DOWN="$down"
+  if [ -n "$CAPMAP_DOWN" ]; then
+    echo "→ capability map: DOWN → $(printf '%s' "$CAPMAP_DOWN" | cut -d'|' -f1 | tr '\n' ',' | sed 's/,$//')"
+  fi
+  return 0
+}
+
+# Re-probe only the tiers currently marked down: a backend that comes back is picked up with
+# no restart (a model finishing a pull, ollama restarted, a key renewed).
+refresh_capability_map() {
+  local entry tier still=""
+  [ -n "$CAPMAP_DOWN" ] || return 0
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    tier="${entry%%|*}"
+    if tier_probe "$tier"; then
+      echo "  ↳ capability map: '$tier' is reachable again — back in service"
+    else
+      still="$(printf '%s\n%s' "$still" "$entry" | awk 'NF')"
+    fi
+  done <<< "$CAPMAP_DOWN"
+  CAPMAP_DOWN="$still"
+  return 0
+}
+
+# Read api.demand → DEMAND. Unreadable (no view, no substrate, error) leaves it EMPTY, which
+# tier_has_demand reads as "everything is demanded" — the v7 gate.
+refresh_demand() {
+  [ "${LOOP_CONSUME_DEMAND:-1}" = "1" ] || { DEMAND=""; return 0; }
+  DEMAND="$(ai demand --token "$OVERSIGHT_TOKEN" 2>/dev/null \
+    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{r=[]};if(!Array.isArray(r))r=[];process.stdout.write(r.filter(x=>x&&Array.isArray(x.bundle)).map(x=>x.pending+"|"+x.bundle.slice().sort().join(",")).join("\n"))})' || true)"
+  return 0
+}
+
+# Is every feature of $2 (comma-separated) present in $1 (comma-separated)?
+features_subset() {
+  local hay=",$1," f
+  local IFS=','
+  for f in $2; do
+    [ -n "$f" ] || continue
+    case "$hay" in *",$f,"*) ;; *) return 1 ;; esac
+  done
+  return 0
+}
+
+# Does any demanded bundle fit inside this tier's features? Empty DEMAND ⇒ yes (degrade).
+tier_has_demand() {
+  local tier="$1" feats line
+  [ -n "$DEMAND" ] || return 0
+  feats="$(role_features "$tier")"
+  [ -n "$feats" ] || return 1
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    features_subset "$feats" "${line#*|}" && return 0
+  done <<< "$DEMAND"
+  return 1
+}
+
+# The largest demanded count this tier can serve — the implementer pool's floor. Empty
+# DEMAND ⇒ the configured pool size (degrade to v7).
+demand_count_for() {
+  local tier="$1" feats line best=0 n
+  [ -n "$DEMAND" ] || { echo "$LOOP_POOL_SIZE"; return 0; }
+  feats="$(role_features "$tier")"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    n="${line%%|*}"
+    if features_subset "$feats" "${line#*|}"; then
+      [ "$n" -gt "$best" ] && best="$n"
+    fi
+  done <<< "$DEMAND"
+  echo "$best"
+  # `return 0` is load-bearing, not tidiness. Without it this function inherits the status of
+  # its last comparison — 1 whenever the final bundle did not raise `best` — and the caller's
+  # `pool_n="$(demand_count_for …)"` is a plain assignment, so under `set -e` the SUPERVISOR
+  # EXITS. It did: the service vanished mid-run leaving its status file frozen on the last
+  # good tick, which reads exactly like a hang. Every helper here returns explicitly for the
+  # same reason.
+  return 0
+}
+
+# The one gate every spawn passes: live, demanded, not banned. Prints WHY when it declines,
+# so a quiet round is legible rather than mysterious.
+should_spawn() {
+  local tier="$1" round="${2:-}"
+  if ! tier_is_live "$tier"; then
+    echo "→ round $round: SKIP '$tier' — backend unreachable (capability map)"; return 1
+  fi
+  if skip_if_banned "$tier"; then
+    echo "→ round $round: SKIP '$tier' — family banned (consuming governance)"; return 1
+  fi
+  if ! tier_has_demand "$tier"; then
+    echo "→ round $round: SKIP '$tier' — no pending work needs its capabilities (demand-shaped)"; return 1
+  fi
+  return 0
+}
+
+# Is ANY demanded bundle served by a live tier? Empty demand ⇒ yes (degrade to v7: the
+# service activates and the tiers sort it out). Used by the standing service to decline an
+# activation it already knows nothing can move — the D3 "predictive, no wasted fleet-spawn".
+has_serviceable_demand() {
+  local line tier feats
+  [ -n "$DEMAND" ] || return 0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    for tier in $(all_tiers); do
+      tier_is_live "$tier" || continue
+      feats="$(role_features "$tier")"
+      [ -n "$feats" ] || continue
+      features_subset "$feats" "${line#*|}" && return 0
+    done
+  done <<< "$DEMAND"
+  return 1
+}
+
+# Demanded bundles that NO live tier can serve, split by cause (design D3). Predictive: the
+# service names them without burning an activation to discover them, and holds rather than
+# spinning. Narrows `stalled` to its true meaning — "a live, capable family kept failing".
+compute_unserviceable() {
+  local line bundle count tier feats served_live served_cfg out=""
+  UNSERVICEABLE=""
+  [ -n "$DEMAND" ] || return 0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    count="${line%%|*}"; bundle="${line#*|}"
+    served_live=0; served_cfg=""
+    for tier in $(all_tiers); do
+      feats="$(role_features "$tier")"
+      [ -n "$feats" ] || continue
+      if features_subset "$feats" "$bundle"; then
+        served_cfg="$tier"
+        tier_is_live "$tier" && { served_live=1; break; }
+      fi
+    done
+    [ "$served_live" = "1" ] && continue
+    if bundle_is_human_held "$bundle"; then
+      # THE THIRD CAUSE, which the design note could not foresee: some capabilities are
+      # unseated ON PURPOSE because a person holds them (roles.sh::LOOP_HUMAN_FEATURES —
+      # role:intaker, role:auditor). Advising "seat a family" here would be advice to
+      # dismantle the human boundary M24/M22 deliberately built. The work is not
+      # unserviceable; it is waiting for you.
+      out="$(printf '%s\n%s' "$out" "$count|$bundle|awaiting a human|this capability is human-held by design; a person must act" | awk 'NF')"
+    elif [ -n "$served_cfg" ]; then
+      out="$(printf '%s\n%s' "$out" "$count|$bundle|unserviceable|the family that provides it is unreachable ($served_cfg is down)" | awk 'NF')"
+    else
+      out="$(printf '%s\n%s' "$out" "$count|$bundle|unserviceable|no configured family provides it; seat one" | awk 'NF')"
+    fi
+  done <<< "$DEMAND"
+  UNSERVICEABLE="$out"
+  # Say it when it CHANGES, not on every poll: an idle service re-reads demand every
+  # LOOP_IDLE_POLL_SECS, and a standing condition repeated 240 times an hour is noise that
+  # buries the run it sits beside.
+  if [ -n "$UNSERVICEABLE" ] && [ "$UNSERVICEABLE" != "$UNSERVICEABLE_LOGGED" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      printf '%s\n' "$line" | awk -F'|' '{printf "⚠ %s: %s task(s) need {%s} — %s\n", $3, $1, $2, $4}' >&2
+    done <<< "$UNSERVICEABLE"
+  fi
+  UNSERVICEABLE_LOGGED="$UNSERVICEABLE"
+  return 0
+}
+
+# Does this bundle's demand rest on a capability a PERSON holds (roles.sh::LOOP_HUMAN_FEATURES)?
+bundle_is_human_held() {
+  local bundle="$1" f h
+  local IFS=','
+  for f in $bundle; do
+    for h in "${LOOP_HUMAN_FEATURES[@]:-}"; do
+      [ -n "$h" ] && [ "$f" = "$h" ] && return 0
+    done
+  done
+  return 1
+}
+
+# The single worst cause currently outstanding, for the service's status note.
+unserviceable_summary() {
+  [ -n "$UNSERVICEABLE" ] || return 0
+  printf '%s' "$UNSERVICEABLE" | head -1 \
+    | awk -F'|' '{printf "%s: %s task(s) need {%s} — %s", $3, $1, $2, $4}' || true
+  return 0
+}
+
 # ── run_activation: ONE full drain attempt (the round loop) ───────────────────
 # The v3–v6 round loop, lifted verbatim: fan the primary cheap implementer into a pool
 # (throughput), then the serial tiers once each, then the frontier peers concurrently;
@@ -286,15 +557,21 @@ ACTIVATION_ACTIVE=0     # active count after the last round (readable by the cal
 ACTIVATION_BLOCKED=0    # blocked count after the last round
 ACTIVATION_ROUNDS=0     # rounds this activation ran
 run_activation() {
-  local round=0 before after active blocked tier
+  local round=0 before after active blocked tier pool_n
   while true; do
     [ "${DRAINING:-0}" = 1 ] && return 3
     round=$((round + 1))
+    board_refresh
     before="$(board_sig)"
     # Consume governance (D6): refresh the banned set once per round (service only —
     # LOOP_CONSUME_GOVERNANCE; the batch driver leaves GOV_BANNED empty so skip_if_banned
     # always proceeds and behaviour is unchanged).
     [ "${LOOP_CONSUME_GOVERNANCE:-0}" = 1 ] && refresh_governance
+    # M27: what is waiting (capability terms) and what can still answer. Both degrade to
+    # "spawn anyway" when unavailable, so a failure here costs money, never correctness.
+    refresh_capability_map
+    refresh_demand
+    compute_unserviceable
     # Design pass (LOOP_DESIGN_TIERS — empty for the BATCH driver, which decomposes the
     # brief ONCE upfront; ('designer') for the standing SERVICE, where decomposition is
     # CONTINUOUS — proposed dev tasks and, later, accepted intake briefs keep arriving and
@@ -302,41 +579,54 @@ run_activation() {
     # sweep with no brief just advances/decomposes whatever proposed work is on the board.
     for tier in "${LOOP_DESIGN_TIERS[@]:-}"; do
       [ -n "$tier" ] || continue
-      if skip_if_banned "$tier"; then echo "→ round $round: SKIP design tier '$tier' — family banned (consuming governance)"; continue; fi
+      should_spawn "$tier" "$round" || continue
       echo "→ round $round: design tier '$tier' sweeping…"
-      run_sweep "$tier" || echo "  (design tier '$tier' sweep exited non-zero — continuing)"
+      if ! run_sweep "$tier"; then
+        echo "  (design tier '$tier' sweep exited non-zero — continuing)"
+        mark_tier_down "$tier"
+      fi
     done
     # Tier-0 pre-pass: cheapest implementer(s) drain what they can BEFORE the pool fans
     # out (roles.sh::LOOP_PRE_TIERS). Single serial sweeps (a 1-session backend belongs
     # here, never in the ×LOOP_POOL_SIZE pool).
     for tier in "${LOOP_PRE_TIERS[@]:-}"; do
       [ -n "$tier" ] || continue
-      if skip_if_banned "$tier"; then echo "→ round $round: SKIP pre-pool tier '$tier' — family banned (consuming governance)"; continue; fi
+      should_spawn "$tier" "$round" || continue
       echo "→ round $round: pre-pool tier '$tier' sweeping…"
-      run_sweep "$tier" || echo "  (pre-pool tier '$tier' sweep exited non-zero — continuing)"
+      if ! run_sweep "$tier"; then
+        echo "  (pre-pool tier '$tier' sweep exited non-zero — continuing)"
+        mark_tier_down "$tier"
+      fi
     done
-    if skip_if_banned "$LOOP_POOL_TIER"; then
-      echo "→ round $round: SKIP pool tier '$LOOP_POOL_TIER' — family banned (consuming governance)"
-    else
-      echo "→ round $round: ${LOOP_POOL_SIZE} concurrent '${LOOP_POOL_TIER}' implementers…"
-      run_pool "$LOOP_POOL_TIER" "$LOOP_POOL_SIZE"
+    if should_spawn "$LOOP_POOL_TIER" "$round"; then
+      # The pool sizes to demand: one pending task spawns ONE implementer, not three. The
+      # LOOP_POOL_SIZE cap is unchanged; only the floor now tracks what is waiting.
+      pool_n="$(demand_count_for "$LOOP_POOL_TIER" || echo "$LOOP_POOL_SIZE")"
+      [ "$pool_n" -gt "$LOOP_POOL_SIZE" ] && pool_n="$LOOP_POOL_SIZE"
+      [ "$pool_n" -lt 1 ] && pool_n=1
+      echo "→ round $round: ${pool_n} concurrent '${LOOP_POOL_TIER}' implementers (cap ${LOOP_POOL_SIZE})…"
+      run_pool "$LOOP_POOL_TIER" "$pool_n"
     fi
     for tier in "${LOOP_SERIAL_TIERS[@]}"; do
-      if skip_if_banned "$tier"; then echo "→ round $round: SKIP tier '$tier' — family banned (consuming governance)"; continue; fi
+      should_spawn "$tier" "$round" || continue
       echo "→ round $round: tier '$tier' sweeping…"
-      run_sweep "$tier" || echo "  (tier '$tier' sweep exited non-zero — continuing)"
+      if ! run_sweep "$tier"; then
+        echo "  (tier '$tier' sweep exited non-zero — continuing)"
+        mark_tier_down "$tier"
+      fi
     done
     # Frontier peers: filter out any banned peer, run the rest concurrently.
     local peers=() p
     for p in "${LOOP_FRONTIER_PEERS[@]}"; do
-      if skip_if_banned "$p"; then echo "→ round $round: SKIP frontier peer '$p' — family banned (consuming governance)"; else peers+=("$p"); fi
+      if should_spawn "$p" "$round"; then peers+=("$p"); fi
     done
     if [ "${#peers[@]}" -gt 0 ]; then
       echo "→ round $round: frontier peers concurrently: ${peers[*]}…"
       run_concurrent "${peers[@]}"
     else
-      echo "→ round $round: all frontier peers banned — skipping frontier this round"
+      echo "→ round $round: no frontier peer to spawn this round (no demand, banned, or unreachable)"
     fi
+    board_refresh
     read -r active blocked <<<"$(counts)"
     after="$(board_sig)"
     echo "  round $round complete: ${active} active, ${blocked} blocked"
