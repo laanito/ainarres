@@ -441,7 +441,7 @@ export function fmtDuration(interval) {
   return `${totalH}h ${m}m`;
 }
 
-export function formatReport({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [], spendAnomalies = [], operationalFlags = [], openBriefs = [], stuckTasks = [] } = {}, { lane = null } = {}) {
+export function formatReport({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [], spendAnomalies = [], operationalFlags = [], openBriefs = [], stuckTasks = [], operatorActions = [] } = {}, { lane = null } = {}) {
   const lines = [lane ? `end-of-run report — lane ${lane}` : "end-of-run report — all lanes"];
 
   // What shipped: tasks at a terminal stage.
@@ -623,6 +623,41 @@ export function formatReport({ board = [], timeline = [], trackRecord = [], gove
     }
   }
 
+  // v8 — operator ledger (api.operator_actions): what the operator seat did —
+  // including the acts that were refused or failed, which are the operator's own
+  // misses and must be visible as such. The ledger is a RECORD, never a verdict:
+  // render what the seat reported and nothing more — no scoring, no ban
+  // recommendation. Rows arrive newest-first from the view; consume them in the
+  // GIVEN order (no re-sort, no re-group, no de-dupe), capping the detail lines
+  // at the first 10. Rendered AFTER the intake section and IMMEDIATELY BEFORE
+  // the operational block, which stays the LAST section. Pure, null-guarded,
+  // never throws.
+  lines.push("operator (v8 — what the seat did):");
+  if (operatorActions.length === 0) {
+    lines.push("  (no operator actions)");
+  } else {
+    const refusedFailed = operatorActions.filter(r => r && (r.outcome === "refused" || r.outcome === "failed")).length;
+    lines.push(`  ${operatorActions.length} action(s) · ${refusedFailed} refused/failed`);
+    for (const r of operatorActions.slice(0, 10)) {
+      const row = r ?? {};
+      const family = row.family ?? "—";
+      const action = row.action ?? "";
+      let targetPart;
+      if (row.target != null && row.target !== "") {
+        targetPart = `→ ${row.target}`;
+      } else if (row.task_id != null && row.task_id !== "") {
+        targetPart = `→ task ${row.task_id}`;
+      } else {
+        targetPart = "(instance)";
+      }
+      if (row.outcome === "refused" || row.outcome === "failed") {
+        lines.push(`  - ${family} ${action} ${targetPart} — ${row.outcome}: ${row.reason ?? "no reason given"}`);
+      } else {
+        lines.push(`  - ${family} ${action} ${targetPart}`);
+      }
+    }
+  }
+
   // M23 Slice B — operational watch (v6 — health & spend): stalled/stranded claims
   // derived from the board (no extra fetch), spend anomalies (api.spend_anomalies)
   // and operational flags (api.operational_flags). Always the LAST section, after
@@ -674,7 +709,7 @@ export function formatReport({ board = [], timeline = [], trackRecord = [], gove
 // Pure, TOTAL JSON shaper for the end-of-run report. Same two-arg signature as
 // formatReport: rows in (already fetched), plain object out (no I/O, no clock,
 // never throws). Mirrors the same structure report --json will emit.
-export function reportJson({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [], spendAnomalies = [], operationalFlags = [], openBriefs = [], stuckTasks = [] } = {}, { lane = null } = {}) {
+export function reportJson({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [], spendAnomalies = [], operationalFlags = [], openBriefs = [], stuckTasks = [], operatorActions = [] } = {}, { lane = null } = {}) {
   const shipped = board
     .filter((r) => r.is_terminal === true)
     .map((row) => {
@@ -704,6 +739,15 @@ export function reportJson({ board = [], timeline = [], trackRecord = [], govern
       briefed: openBriefs.filter(r => r && r.stage === "briefed").length,
       accepted: openBriefs.filter(r => r && r.stage === "accepted").length,
       open: openBriefs.filter(r => r && r.stage !== "accepted"),
+    },
+    // v8 — operator ledger (api.operator_actions): what the operator seat did.
+    // total/failed count ALL rows passed in (pre-cap); actions pass through
+    // UNCHANGED, capped at 10 — the JSON shape stays dumb (no reshaping, no
+    // formatting), same discipline as operational.stuck.
+    operator: {
+      total: operatorActions.length,
+      failed: operatorActions.filter(r => r && (r.outcome === "refused" || r.outcome === "failed")).length,
+      actions: operatorActions.slice(0, 10),
     },
     // M23 Slice B — operational watch: health derived from the board (family is the
     // JSON null fallback here, NOT the em dash used in the text rendering), spend
@@ -1318,7 +1362,10 @@ const COMMANDS = {
     // intake view still yields a full report.
     // v8: stuck_tasks is unfiltered with NO order= param (the view's own order is
     // authoritative) and degrades to [] the same way.
-    const [b, t, tr, gov, af, ga, sa, of, ob, st] = await Promise.all([
+    // v8: operator_actions is unfiltered, limit=25, NO order= param (the view is
+    // already newest-first) and degrades to [] — a substrate without the view
+    // still yields a full report.
+    const [b, t, tr, gov, af, ga, sa, of, ob, st, oa] = await Promise.all([
       restGet(`board?${boardQ}`, token),
       restGet(`timeline?${tlQ}`, token),
       restGet(`family_track_record?order=family.asc,capability.asc`, token),
@@ -1329,6 +1376,7 @@ const COMMANDS = {
       restGet(`operational_flags?order=created_at.desc`, token),
       restGet(`open_briefs?order=created_at.desc`, token),
       restGet(`stuck_tasks`, token),
+      restGet(`operator_actions?limit=25`, token),
     ]);
     for (const r of [b, t]) {
       if (!r.httpOk) { emit(r.body ?? { ok: false, code: "http_error", status: r.status }, false); return; }
@@ -1341,10 +1389,11 @@ const COMMANDS = {
     const operationalFlags = of.httpOk && Array.isArray(of.body) ? of.body : [];
     const openBriefs = ob.httpOk && Array.isArray(ob.body) ? ob.body : [];
     const stuckTasks = st.httpOk && Array.isArray(st.body) ? st.body : [];
+    const operatorActions = oa.httpOk && Array.isArray(oa.body) ? oa.body : [];
     if (values.json) {
-      process.stdout.write(`${JSON.stringify(reportJson({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions, spendAnomalies, operationalFlags, openBriefs, stuckTasks }, { lane }), null, 2)}\n`);
+      process.stdout.write(`${JSON.stringify(reportJson({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions, spendAnomalies, operationalFlags, openBriefs, stuckTasks, operatorActions }, { lane }), null, 2)}\n`);
     } else {
-      process.stdout.write(`${formatReport({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions, spendAnomalies, operationalFlags, openBriefs, stuckTasks }, { lane })}\n`);
+      process.stdout.write(`${formatReport({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions, spendAnomalies, operationalFlags, openBriefs, stuckTasks, operatorActions }, { lane })}\n`);
     }
   },
 

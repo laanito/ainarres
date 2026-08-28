@@ -835,6 +835,120 @@ describe("formatReport", () => {
     expect(lines.join("\n")).not.toContain("i10");
     expect(lines.join("\n")).not.toContain("i11");
   });
+
+  // ── v8 — operator ledger (api.operator_actions) ────────────────────────────
+
+  test("operator block: empty actions print the header + (no operator actions), every existing section still renders, no throw", () => {
+    const out = formatReport({});
+    expect(out).toContain("operator (v8 — what the seat did):");
+    expect(out).toContain("  (no operator actions)");
+    // Pre-existing sections still render.
+    expect(out).toContain("shipped (");
+    expect(out).toContain("family track record");
+    expect(out).toContain("governance (v5");
+    expect(out).toContain("intake (v6 — open briefs):");
+    expect(out).toContain("operational (v6 — health & spend watch):");
+    expect(() => formatReport({})).not.toThrow();
+  });
+
+  test("operator block renders AFTER intake and IMMEDIATELY BEFORE the operational block (operational stays last)", () => {
+    const out = formatReport({});
+    const intakeIdx = out.indexOf("intake (v6 — open briefs):");
+    const opIdx = out.indexOf("operator (v8 — what the seat did):");
+    const operationalIdx = out.indexOf("operational (v6 — health & spend watch):");
+    expect(intakeIdx).toBeGreaterThan(-1);
+    expect(opIdx).toBeGreaterThan(intakeIdx);
+    expect(operationalIdx).toBeGreaterThan(opIdx);
+    // Nothing but the operator section sits between its header and the
+    // operational header.
+    expect(out.slice(opIdx, operationalIdx)).toBe("operator (v8 — what the seat did):\n  (no operator actions)\n");
+    // Operational is still the last section.
+    const opSection = out.slice(operationalIdx);
+    expect(opSection).toContain("operational (v6 — health & spend watch):");
+    expect(opSection.trimEnd().endsWith("(all clear — no health, spend, or operational-flag anomalies)")).toBe(true);
+  });
+
+  test("operator block: ok row with a task_id renders → task t1 and the count line", () => {
+    const out = formatReport({
+      operatorActions: [{ family: "agent+operator", action: "refine", target: null, task_id: "t1", outcome: "ok" }],
+    });
+    expect(out).toContain("  - agent+operator refine → task t1");
+    expect(out).toContain("  1 action(s) · 0 refused/failed");
+  });
+
+  test("operator block: service_start with a target renders → the standing service", () => {
+    const out = formatReport({
+      operatorActions: [{ family: "agent+operator", action: "service_start", target: "the standing service", outcome: "ok" }],
+    });
+    expect(out).toContain("service_start → the standing service");
+  });
+
+  test("operator block: instance-scoped act with no target and no task_id renders (instance)", () => {
+    const out = formatReport({
+      operatorActions: [{ family: "agent+operator", action: "service_start", target: null, task_id: null, outcome: "ok" }],
+    });
+    expect(out).toContain("service_start (instance)");
+  });
+
+  test("operator block: refused act shows its reason and the count line reads 1 refused/failed", () => {
+    const out = formatReport({
+      operatorActions: [{ family: "agent+operator", action: "refine", task_id: "t2", outcome: "refused", reason: "advance to briefed was refused" }],
+    });
+    expect(out).toContain("— refused: advance to briefed was refused");
+    expect(out).toContain("  1 action(s) · 1 refused/failed");
+  });
+
+  test("operator block: failed act with no reason renders — failed: no reason given", () => {
+    const out = formatReport({
+      operatorActions: [{ family: "agent+operator", action: "refine", task_id: "t3", outcome: "failed", reason: null }],
+    });
+    expect(out).toContain("— failed: no reason given");
+  });
+
+  test("operator block: null family renders an em dash", () => {
+    const out = formatReport({
+      operatorActions: [{ family: null, action: "refine", task_id: "t4", outcome: "ok" }],
+    });
+    expect(out).toContain("  - — refine → task t4");
+  });
+
+  test("operator block: 12 rows render EXACTLY 10 detail lines, count line still says 12 action(s)", () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      family: "agent+operator", action: "refine", task_id: `t${i}`, outcome: "ok",
+    }));
+    const out = formatReport({ operatorActions: many });
+    expect(out).toContain("  12 action(s) · 0 refused/failed");
+    const detailLines = out.split("\n").filter(l => l.startsWith("  - agent+operator refine → task t"));
+    expect(detailLines.length).toBe(10);
+    expect(detailLines[0]).toContain("t0");
+    expect(detailLines[9]).toContain("t9");
+    expect(detailLines.join("\n")).not.toContain("t10");
+    expect(detailLines.join("\n")).not.toContain("t11");
+  });
+
+  test("operator block: refused/failed count spans ALL rows (pre-cap), not just the rendered 10", () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      family: "agent+operator", action: "refine", task_id: `t${i}`, outcome: i === 11 ? "failed" : "ok",
+    }));
+    const out = formatReport({ operatorActions: many });
+    expect(out).toContain("  12 action(s) · 1 refused/failed");
+    // The failed row (t11) is beyond the 10-line cap and must NOT be rendered.
+    expect(out).not.toContain("t11");
+  });
+
+  test("operator block: the ledger is a RECORD — no scoring, no ban recommendation, no judgement", () => {
+    const out = formatReport({
+      operatorActions: [
+        { family: "agent+operator", action: "refine", task_id: "t1", outcome: "refused", reason: "advance to briefed was refused" },
+        { family: "agent+operator", action: "service_start", target: "the standing service", outcome: "failed", reason: null },
+      ],
+    });
+    const opSection = out.slice(out.indexOf("operator (v8 — what the seat did):"));
+    expect(opSection).not.toContain("ban");
+    expect(opSection).not.toContain("BAN");
+    expect(opSection).not.toContain("failing");
+    expect(opSection).not.toContain("score");
+  });
 });
 
 describe("fmtTokens", () => {
@@ -912,6 +1026,7 @@ describe("reportJson", () => {
       auditFlags: [],
       governanceActions: [],
       intake: { proposed: 0, briefed: 0, accepted: 0, open: [] },
+      operator: { total: 0, failed: 0, actions: [] },
       operational: { health: [], spend: [], flags: [], stuck: [] },
     });
   });
@@ -938,6 +1053,7 @@ describe("reportJson", () => {
       auditFlags: [],
       governanceActions: [],
       intake: { proposed: 0, briefed: 0, accepted: 0, open: [] },
+      operator: { total: 0, failed: 0, actions: [] },
       operational: { health: [], spend: [], flags: [], stuck: [] },
     });
   });
@@ -999,7 +1115,7 @@ describe("reportJson", () => {
     expect(result.auditFlags).toBe(auditFlags);
     expect(result.governanceActions).toBe(governanceActions);
     expect(result.shipped).toEqual([{ task_id: "s1", pr: null, implemented: null, reviewed: null, integrated: null, crossFamilyReview: false }]);
-    expect(Object.keys(result)).toEqual(["lane", "shipped", "trackRecord", "governance", "auditFlags", "governanceActions", "intake", "operational"]);
+    expect(Object.keys(result)).toEqual(["lane", "shipped", "trackRecord", "governance", "auditFlags", "governanceActions", "intake", "operator", "operational"]);
   });
 
   // ── M24 Slice B — intake watch (open briefs) ──────────────────────────────
@@ -1028,6 +1144,46 @@ describe("reportJson", () => {
     expect(result.intake.open[0]).toEqual({ task_id: "i0", stage: "proposed_brief" });
     expect(result.intake.open[14]).toEqual({ task_id: "i14", stage: "proposed_brief" });
     expect(result.intake.open.map(r => r.task_id)).toEqual(many.map(r => r.task_id));
+  });
+
+  // ── v8 — operator ledger (api.operator_actions) ────────────────────────────
+
+  test("(8) operator field: a single failed row yields total 1, failed 1, actions [that row]", () => {
+    const row = { family: "agent+operator", action: "refine", outcome: "failed" };
+    expect(reportJson({ operatorActions: [row] }).operator).toEqual({
+      total: 1,
+      failed: 1,
+      actions: [row],
+    });
+  });
+
+  test("(8) operator field: empty input yields total 0, failed 0, actions []", () => {
+    expect(reportJson({}).operator).toEqual({ total: 0, failed: 0, actions: [] });
+  });
+
+  test("(8) operator field: total/failed count ALL rows (pre-cap), actions pass through UNCHANGED, capped at 10", () => {
+    const operatorActions = [
+      { family: "agent+operator", action: "refine", outcome: "failed" },
+      { family: "agent+operator", action: "service_start", target: "the standing service", outcome: "ok" },
+    ];
+    const result = reportJson({ operatorActions });
+    expect(result.operator).toEqual({
+      total: 2,
+      failed: 1,
+      actions: operatorActions,
+    });
+    expect(result.operator.actions[0]).toBe(operatorActions[0]);
+    expect(result.operator.actions[1]).toBe(operatorActions[1]);
+
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      family: "agent+operator", action: "refine", task_id: `t${i}`, outcome: "ok",
+    }));
+    const capped = reportJson({ operatorActions: many });
+    expect(capped.operator.total).toBe(12);
+    expect(capped.operator.failed).toBe(0);
+    expect(capped.operator.actions.length).toBe(10);
+    expect(capped.operator.actions[0]).toEqual({ family: "agent+operator", action: "refine", task_id: "t0", outcome: "ok" });
+    expect(capped.operator.actions[9]).toEqual({ family: "agent+operator", action: "refine", task_id: "t9", outcome: "ok" });
   });
 });
 
