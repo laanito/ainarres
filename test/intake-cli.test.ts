@@ -188,12 +188,20 @@ describe("ainarres refine — the intaker's step in one command", () => {
 });
 
 describe("resolveIntakePsk precedence", () => {
-  it("--psk beats the environment, which beats the key file", () => {
+  it("explicit flags beat the environment, which beats the default key file", () => {
     const path = join(tmp, "precedence.psk");
     writeFileSync(path, "from-file\n");
     expect(resolveIntakePsk({ psk: "from-flag" }, { INTAKE_PSK: "from-env" })).toBe("from-flag");
-    expect(resolveIntakePsk({ "psk-file": path }, { INTAKE_PSK: "from-env" })).toBe("from-env");
+    // --psk-file is an ARGUMENT the operator just typed; INTAKE_PSK is ambient. The
+    // argument wins. (It did not, until an inscrutable 401 made the case.)
+    expect(resolveIntakePsk({ "psk-file": path }, { INTAKE_PSK: "from-env" })).toBe("from-file");
     expect(resolveIntakePsk({ "psk-file": path }, {})).toBe("from-file");
+    expect(resolveIntakePsk({}, { INTAKE_PSK: "from-env" })).toBe("from-env");
+    // A given --psk-file is EXCLUSIVE: unreadable means "no key", never a quiet fallback
+    // to some other key the operator did not name.
     expect(resolveIntakePsk({ "psk-file": join(tmp, "nope.psk") }, {})).toBeNull();
+    expect(resolveIntakePsk({ "psk-file": join(tmp, "nope.psk") }, { INTAKE_PSK: "from-env" })).toBeNull();
+    // INTAKE_PSK_FILE is environment too, so a real --psk-file still outranks it.
+    expect(resolveIntakePsk({ "psk-file": path }, { INTAKE_PSK_FILE: join(tmp, "nope.psk") })).toBe("from-file");
   });
 });
