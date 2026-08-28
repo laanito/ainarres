@@ -114,7 +114,11 @@ threat-model ADR). v6 exercises the role the existing way: the owner, holding `r
 creates and refines a brief via the current CLI/verbs, then (as the designer family, or holding
 `role:designer`) decomposes it into the dev lane. The "interactivity" of intake in v6 is **the
 human working the brief by hand**; a real Customer↔Intaker dialog is the v7 channel's job. This
-keeps M24 additive — no new ingress, no topology change (ADR 0023).
+keeps M24 additive — no new ingress, no topology change (ADR 0023). *(v8 update: the refine
+step is still the human's — no tier holds `role:intaker` — but it is now one command,
+`ainarres refine <brief-id>`, instead of a hand-minted token plus claim plus advance. The
+boundary did not move; only the ceremony around it did. See
+[`service.md` § the operator's flow](service.md).)*
 
 **D7 — The surface is an "open briefs" board view + a report line.** `api.open_briefs`
 (intake-lane tasks by stage — `proposed_brief` / `briefed` / `accepted`, newest-first, reusing
