@@ -944,6 +944,65 @@ function parseGrokUsage(logText) {
 // name, and nothing else. It holds no capability:integrate, no role:auditor.
 const OPERATOR_FAMILY = "agent+operator";
 
+// v8 step 3 (ADR 0028) — where the seat's token comes from. PREFER THE BROKER: it asks
+// api.issue_operator_credential, so the DATABASE decides what may be in the token (role ∈
+// {agent, monitor}, family must hold role:operator, features = the provisioned snapshot,
+// TTL capped) and the issuance is recorded. Self-minting is the FALLBACK for a substrate
+// with no broker running — it still works, and it is visibly weaker: the token is whatever
+// we asked for, and the act shows up in api.unbrokered_operator_acts with no issuance
+// behind it. That visibility is the point; the owner chose an audited boundary, not a
+// prevented one.
+function resolveBrokerPsk(values = {}, env = process.env) {
+  if (values["broker-psk"]) return values["broker-psk"];
+  if (env.BROKER_PSK) return env.BROKER_PSK;
+  const path = env.BROKER_PSK_FILE
+    || fileURLToPath(new URL("../loop/run/broker.psk", import.meta.url));
+  try {
+    return readFileSync(path, "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+// Ask the broker for a seat credential. Returns the signed token, or null when no broker
+// is reachable (no key, not listening, refused) — the caller decides whether to fall back.
+// A REFUSAL is not the same as an absence: if the envelope says no, say so loudly rather
+// than quietly self-minting the thing it just declined.
+export async function brokerToken({ role = "agent", ttl = 300, reason = null, values = {} } = {}) {
+  const psk = resolveBrokerPsk(values);
+  if (!psk) return null;
+  const port = values["broker-port"] ?? process.env.BROKER_PORT ?? "3021";
+  const url = values["broker-url"] ?? `http://127.0.0.1:${port}/token`;
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Broker-Key": psk },
+      body: JSON.stringify({ role, ttl, reason }),
+    });
+  } catch {
+    return null; // not listening — absence, not refusal
+  }
+  const text = await res.text();
+  let body;
+  try { body = text ? JSON.parse(text) : null; } catch { body = null; }
+  if (res.ok && body && body.ok === true && body.token) return body.token;
+  fail(`seat credential refused by the envelope (${(body && body.code) || res.status}: ${(body && body.error) || "no reason given"})`);
+  return null;
+}
+
+// The seat's token for a command: the broker when one is reachable, a self-minted token
+// otherwise. `features` is only used by the fallback — the broker takes its features from
+// the family's provisioning, which is the whole point.
+async function seatToken({ role = "agent", features = [], ttl = 300, reason = null, values = {}, family = OPERATOR_FAMILY } = {}) {
+  const brokered = await brokerToken({ role, ttl, reason, values });
+  if (brokered) return { token: brokered, brokered: true };
+  return {
+    token: mintJwt({ sub: randomUUID(), family, role, features }, ttl),
+    brokered: false,
+  };
+}
+
 // Write one line to the operator's append-only ledger (api.record_operator_action,
 // role:operator-gated). BEST EFFORT ON PURPOSE: the ledger records what the operator
 // did; it must never be the reason an operator act fails. A substrate that refuses the
@@ -1024,15 +1083,20 @@ const COMMANDS = {
     // record and the ledger line must all say `agent+operator`. `--family` still
     // overrides for the human doing it by hand.
     const family = values.family ?? OPERATOR_FAMILY;
-    const tok = token || mintJwt(
-      {
-        sub: randomUUID(),
-        family,
-        role: "agent",
-        features: [`lane:${lane}`, "role:intaker", "role:operator"],
-      },
-      Number(values.ttl ?? 900),
-    );
+    // v8 step 3: ask the envelope first. The features below are the FALLBACK's request —
+    // a brokered token carries the seat family's provisioned snapshot instead, which is
+    // what makes the prohibitions structural rather than polite.
+    const seat = token
+      ? { token, brokered: false }
+      : await seatToken({
+          role: "agent",
+          family,
+          features: [`lane:${lane}`, "role:intaker", "role:operator"],
+          ttl: Number(values.ttl ?? 900),
+          reason: `refine on lane ${lane}`,
+          values,
+        });
+    const tok = seat.token;
     const tries = Math.max(1, Number(values.tries ?? 5));
     const skipped = [];
     for (let i = 0; i < tries; i++) {
@@ -1224,15 +1288,14 @@ const COMMANDS = {
     if (values.detail) {
       try { detail = JSON.parse(values.detail); } catch (e) { fail(`operator-log: --detail is not JSON (${e.message})`); }
     }
-    const tok = token || mintJwt(
-      {
-        sub: randomUUID(),
-        family: values.family ?? OPERATOR_FAMILY,
-        role: "agent",
-        features: ["role:operator"],
-      },
-      Number(values.ttl ?? 900),
-    );
+    const tok = token || (await seatToken({
+      role: "agent",
+      family: values.family ?? OPERATOR_FAMILY,
+      features: ["role:operator"],
+      ttl: Number(values.ttl ?? 900),
+      reason: `operator-log ${action}`,
+      values,
+    })).token;
     const r = await rpc("record_operator_action", {
       p_action: action,
       p_target: values.target ?? null,
@@ -1246,9 +1309,36 @@ const COMMANDS = {
 
   // READ the ledger (api.operator_actions, newest-first). Oversight or monitor token —
   // a delegated monitor whose job is "read what the operator did" holds `monitor`.
+  // v8 step 3 (ADR 0028) — get a seat credential FROM THE ENVELOPE. The database decides
+  // what is in it; the broker only signs. Prints the token alone (so it can be captured
+  // into a variable) or the full envelope with --json.
+  async "seat-token"(rest, values) {
+    const role = values.role ?? "agent";
+    const tok = await brokerToken({
+      role,
+      ttl: Number(values.ttl ?? 300),
+      reason: values.reason ?? null,
+      values,
+    });
+    if (!tok) {
+      fail("seat-token: no broker reachable — start it with `make broker-serve` (it writes loop/run/broker.psk), or pass --broker-psk / set BROKER_PSK");
+    }
+    if (values.json) return emit({ ok: true, token: tok, claims: decodeClaims(tok) });
+    process.stdout.write(`${tok}\n`);
+  },
+
   async "operator-actions"(rest, values, token) {
     const limit = values.limit ? Number(values.limit) : 20;
     const r = await restGet(`operator_actions?limit=${limit}`, token);
+    emit(r.body, r.httpOk);
+  },
+
+  // The issuance trail (v8 step 3): every credential the envelope handed out. Read it next
+  // to api.unbrokered_operator_acts — an operator act with no issuance behind it was signed
+  // by something holding the key directly.
+  async "operator-credentials"(rest, values, token) {
+    const limit = values.limit ? Number(values.limit) : 20;
+    const r = await restGet(`operator_credentials?limit=${limit}`, token);
     emit(r.body, r.httpOk);
   },
 
@@ -1458,6 +1548,8 @@ const OPTS = {
   "governance-status": { token: { type: "string" } },
   "operator-log": { action: { type: "string" }, target: { type: "string" }, task: { type: "string" }, outcome: { type: "string" }, reason: { type: "string" }, detail: { type: "string" }, family: { type: "string" }, ttl: { type: "string" }, token: { type: "string" } },
   "operator-actions": { limit: { type: "string" }, token: { type: "string" } },
+  "seat-token": { role: { type: "string" }, ttl: { type: "string" }, reason: { type: "string" }, "broker-psk": { type: "string" }, "broker-port": { type: "string" }, "broker-url": { type: "string" }, json: { type: "boolean" } },
+  "operator-credentials": { limit: { type: "string" }, token: { type: "string" } },
   "service-status": { file: { type: "string" } },
   status: { lane: { type: "string" }, limit: { type: "string" }, watch: { type: "boolean" }, interval: { type: "string" }, compact: { type: "boolean" }, json: { type: "boolean" }, token: { type: "string" } },
   events: { lane: { type: "string" }, task: { type: "string" }, family: { type: "string" }, type: { type: "string" }, limit: { type: "string" }, json: { type: "boolean" }, token: { type: "string" } },
@@ -1489,6 +1581,9 @@ const USAGE = `ainarres — agent CLI (verbs over PostgREST)
   operator-log  --action SLUG [--target T] [--task UUID] [--outcome ok|refused|failed] [--reason T] [--detail JSON]
             v8 append one line to the operator's ledger — the instance-scoped acts that cannot be events
   operator-actions [--limit N]   read that ledger, newest first (oversight or monitor token)
+  seat-token  [--role agent|monitor] [--ttl 300] [--reason T]
+            v8 get a seat credential FROM the envelope (the DB decides its contents; the broker only signs)
+  operator-credentials [--limit N]   the issuance trail — every credential the envelope handed out
   board | feed | abandoned [--lane L] [--task UUID] [--limit N]
   demand              v7.1 pending work by required-capability bundle (what to wake) — oversight/monitor token
   governance-status   v5 governance state (banned/permanent/heal_at) per (family, capability) — oversight token
@@ -1520,7 +1615,7 @@ if (isMain) {
     const token = bearer(values);
     // `intake` authenticates with the channel's PSK, and `refine` self-mints the intaker
     // token it needs — neither requires an ambient AINARRES_TOKEN.
-    const needsToken = !["token", "version", "service-status", "intake", "refine", "operator-log"].includes(cmd);
+    const needsToken = !["token", "version", "service-status", "intake", "refine", "operator-log", "seat-token"].includes(cmd);
     if (needsToken && !token) fail(`${cmd}: no token (set AINARRES_TOKEN or pass --token)`);
     await COMMANDS[cmd](rest, values, token, positionals[0]);
   }

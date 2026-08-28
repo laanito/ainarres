@@ -20,7 +20,27 @@ a reason, and the reason belongs in your ledger.
 - Governance RPCs (`set_permanent_ban`, `lift_ban`) — granted to the `oversight` role **only**.
   An agent token is refused by PostgREST before it reaches the function body.
 
-## Token minting
+## Getting a token
+
+**Prefer the envelope (v8 step 3).** Start the broker once (`make broker-serve`) and ask it:
+
+```bash
+TOK=$(ainarres seat-token --reason "unblocking task X")     # role agent
+OVR=$(ainarres seat-token --role monitor --reason "reading the board")
+```
+
+The **database** decides what is in that credential — the seat family's provisioned features,
+`agent` or `monitor` only, capped TTL — and every issuance is recorded. You do not get to ask
+for `oversight`, `capability:integrate`, or another family's identity; the envelope refuses,
+out loud.
+
+Two interventions below still need a token the envelope will not issue (another agent's `sub`;
+an `oversight` token for the governance RPCs). Those are the OWNER's acts, minted by hand with
+the key. When you do that, **say so in your ledger** — they will otherwise surface in
+`api.unbrokered_operator_acts` as an operator act nobody issued a credential for, which is
+exactly what that view is for.
+
+## Token minting (the fallback, and the owner's own path)
 
 You hold `JWT_SECRET` (from `loop.env`), so mint locally. First
 `set -a; source loop.env; set +a` (→ `AINARRES_BASE_URL=http://localhost:3011`, the loop

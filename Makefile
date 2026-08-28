@@ -151,5 +151,13 @@ service-selftest: loop-reset
 ## to pin one, or let the channel generate it and persist it to loop/run/intake.psk (0600),
 ## which `ainarres intake` reads — so the key is never copy-pasted between shells. There is
 ## always a key; ADR 0025's "no anonymous write" is unchanged.
+## The CREDENTIAL BROKER (v8 step 3, ADR 0028): the operator seat's envelope. Loopback-bound,
+## PSK-authenticated, owner-run. It holds JWT_SECRET; the DATABASE decides what may be in a
+## token (api.issue_operator_credential) and this process only signs. Optional BROKER_PORT
+## (default 3021). The key needs no ceremony: supply BROKER_PSK, or let it generate one and
+## persist it to loop/run/broker.psk (0600), which `ainarres seat-token` reads.
+broker-serve:
+	@bash -c 'set -a; source loop.env; set +a; BROKER_PSK="$(BROKER_PSK)" BROKER_PORT="$${BROKER_PORT:-3021}" node bin/credential-broker.mjs'
+
 intake-serve:
 	@bash -c 'set -a; source loop.env; set +a; INTAKE_PSK="$(INTAKE_PSK)" INTAKE_PORT="$${INTAKE_PORT:-3020}" node bin/intake-server.mjs'

@@ -31,6 +31,8 @@ the substrate and the standing service without participating in the work pipelin
   failed acts.
 - `api.sweep_usage` — tokens spent by sweeps that claimed no task (v8), readable by
   `monitor`. The spend M20 used to drop.
+- `api.operator_credentials` — every credential the envelope issued (v8 step 3).
+- `api.unbrokered_operator_acts` — operator acts with **no** issuance behind them.
 - You may read the substrate directly with `psql` or PostgREST (you are outside the agent
   surface). **Read-only**: `select` only. No DDL, no `truncate`, no `make reset` / `dbmate` —
   see the 2026-07-04 board wipe.
@@ -104,7 +106,20 @@ Run a monitoring pass on a regular cadence or on demand. Produce a concise repor
      that climbs while deliveries stay flat is redundant tiers or a thrashing pool — check
      `api.demand` and the tier lists before blaming a family.
 
-7. **The operator's own record** (v8 / ADR 0028)
+7. **The operator's credentials** (v8 step 3)
+   - `api.unbrokered_operator_acts` — operator acts whose actor was never issued a credential.
+     These were signed by something holding `JWT_SECRET` directly: the seat bypassing the
+     broker, or the owner at the terminal. **Report every row, and say which you think it is.**
+     A row is a question ("who signed this?"), never a verdict — the owner's own hand-minted
+     interventions land here legitimately, and two of them (releasing another agent's stranded
+     claim, the governance RPCs) genuinely cannot go through the envelope.
+   - What makes it worth reading: on a single-user host the envelope cannot *prevent* a seat
+     from self-minting, only expose it. This view is that exposure. A quiet week here is the
+     evidence that the boundary is holding; a row nobody can account for is the one finding
+     worth waking someone for.
+   - `api.operator_credentials` is the other side — what was issued, to whom, with what TTL.
+
+8. **The operator's own record** (v8 / ADR 0028)
    - `ainarres operator-actions --limit 20` — what the seat did, newest first, including
      `outcome: refused | failed`. `ainarres report` renders the same as an "operator" section.
    - The seat is a family like any other, so it appears in `api.family_track_record` and can be
@@ -131,6 +146,7 @@ Status at <timestamp>
 - Stuck-alive: <task/family/kind, or "none">
 - Governance: <bans/revocations/flags or "clean">
 - Operator: <N actions, M refused/failed, or "none">
+- Unbrokered operator acts: <sub + count, and who you think signed it, or "none">
 - Service: <alive | degraded | down> (wake method: poll <n>s)
 - Expenses: <spend anomalies | track record notes>
 - Spend with nothing claimed: <family: tokens over N sweeps, or "none">

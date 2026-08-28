@@ -162,6 +162,36 @@ prohibition list will otherwise find it themselves and wonder what else was glos
 Neither changes the decision. Both change what "step 2 is done" is allowed to mean: the seat is
 *named and ledgered*, and it is *not yet bounded*.
 
+### Amendment (step 3, 2026-08-28): the envelope, and the limit the owner accepted
+
+Built as `api.issue_operator_credential` + `bin/credential-broker.mjs`. The mechanism it uses
+had been sitting unused since M2: `api.token_claims` reads a family's *provisioned* features and
+returns claims **for a separate minter to sign** — its own header says "the minter signs them".
+That is an envelope. Three versions later this is the caller it was waiting for.
+
+The seat no longer signs; it asks a loopback broker (PSK, owner-run, ADR 0025's posture), and
+the **database** decides what may be in the token: role ∈ {`agent`, `monitor`} — never
+`oversight`, which carries the human's ban/lift EXECUTE, and never `reaper`, which could issue
+credentials; the family must hold `role:operator` (data-driven — the seat is whoever the owner
+provisioned, not a name in code); features are the provisioned snapshot, whole and unedited,
+because *asking is not part of the protocol*; TTL is capped. The issuance is recorded in the
+same statement, so there is no path that mints without a trail.
+
+**The limit, chosen deliberately by the owner.** On one host with one OS user, a shell-capable
+seat can read `loop.env` and sign what it likes, and no code in the substrate can prevent it. The
+owner chose an **audited boundary** over an enforced one: the envelope binds a cooperating seat
+and *exposes* an uncooperative one, via `api.unbrokered_operator_acts` — every issued credential
+records its subject, so an operator act whose actor was never issued one shows. Detection, not
+prevention. Prevention is a deployment (the seat as a separate OS user with no read on the
+secret), documented in `loop/README.md`, not a migration.
+
+This is worth stating plainly rather than letting "the envelope" imply more than it does: **the
+v8 invariant as written — "bounded by a credential envelope it cannot widen" — now holds against
+a seat that goes through the broker, and holds only as an audit trail against one that does
+not.** The success gate's clause 2 ("an attempt by the seat to mint outside its envelope is
+refused, demonstrated as a done-test") is met for the brokered path and is *not* a claim about a
+seat holding the key. Closing that gap is an OS-level deployment step or a later version.
+
 ### The auditor stays human, and the operator may not be the auditor
 
 [ADR 0025](0025-v7-security-posture-local-service.md) answered "who watches the watcher" by pointing

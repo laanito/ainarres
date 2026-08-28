@@ -208,10 +208,48 @@ else to go (the same reconciliation M22 D7 made for human ban/lift). It is writt
 seat*, so it is a good-faith trail, not proof — everything task-shaped is independently in
 `app.events` under `agent+operator`, and that stays the harder record. Read them together.
 
-**What step 2 does not buy.** `api.effective_features()` trusts the signed token minus denials
-(ADR 0007) — it does not re-check `app.family_features`. So the seat is *named and ledgered*,
-not yet *bounded*: a holder of `JWT_SECRET` can still mint anything. Closing that is the
-credential-envelope step. See the amendment in ADR 0028.
+### The credential envelope (v8 step 3)
+
+The seat no longer signs its own tokens. It asks a loopback broker, and the **database** decides
+what may be in the credential:
+
+```sh
+make broker-serve                       # loopback:3021, holds JWT_SECRET, writes loop/run/broker.psk
+ainarres seat-token --reason "why"      # → a token the seat did not get to specify
+ainarres operator-credentials --token "$OV"   # the issuance trail
+```
+
+`api.issue_operator_credential` enforces four rules, none of them in the broker: role ∈
+{`agent`, `monitor`} — never `oversight` (it carries the human's ban/lift `EXECUTE`) and never
+`reaper` (it could issue credentials); the family must hold `role:operator`, which makes the seat
+whoever the **owner** provisioned rather than a name in code; features are the family's
+provisioned snapshot, whole and unedited, because asking for a subset or superset is not part of
+the protocol; and the TTL is capped, since a long-lived credential is a key with extra steps. The
+issuance is recorded in the same statement, so nothing mints without a trail.
+
+`ainarres refine` and `operator-log` prefer the broker and fall back to self-minting when none is
+running — the fallback still works and is visibly weaker.
+
+The mechanism is not new. `api.token_claims` has read provisioned features and returned claims
+**for a separate minter to sign** since M2; this is the caller it was waiting for.
+
+**What this does NOT do, chosen deliberately.** On one host with one OS user, a shell-capable
+seat can read `loop.env` and sign whatever it likes; no code here prevents that. The owner chose
+an **audited boundary**: the envelope binds a cooperating seat and *exposes* one that is not.
+
+```sh
+ainarres operator-credentials      # what the envelope issued
+curl .../unbrokered_operator_acts  # operator acts with no issuance behind them
+```
+
+`api.unbrokered_operator_acts` covers **both** places an operator act can land — `app.events`
+and `app.operator_actions` — because the seat's own ledger is one of the likelier bypasses. A row
+there is a question ("who signed this?"), never a verdict; the owner's own hand-minted acts
+appear too, which is correct.
+
+**To make it prevention rather than detection**, run the seat as a separate OS user (or in a
+container) with no read access to `loop.env` / `.env`, and the broker as the owner. That is a
+deployment choice, not something the substrate can enforce.
 
 ## Run it for real (owner-invoked)
 
