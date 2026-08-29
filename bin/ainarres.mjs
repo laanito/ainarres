@@ -835,6 +835,33 @@ export function decodeClaims(token) {
   return JSON.parse(json);
 }
 
+// A PostgREST `42501 permission denied for function …` is a correct refusal with an
+// unhelpful face: it names the function but never the credential, so the caller cannot
+// tell "I may not do this" from "I am holding the wrong token for it". The commonest
+// cause by far is a read-only credential: the `monitor` coarse role (v8 step 0) holds
+// SELECT on the views and EXECUTE on NOTHING, so every verb refuses it identically.
+//
+// Pure and total: takes the response body and the token's claims, returns a hint string
+// or null. Never throws on a malformed body or unreadable token — a diagnostic that can
+// itself fail is worse than none.
+export function permissionHint(body, claims) {
+  if (!body || body.code !== "42501") return null;
+  const fn = /permission denied for function ([a-z_][a-z0-9_]*)/i.exec(body.message || "");
+  const what = fn ? `api.${fn[1]}` : "that verb";
+  const role = claims && claims.role;
+  if (role === "monitor") {
+    return `that is a READ-ONLY credential (role: monitor) — it holds SELECT on the views and `
+      + `EXECUTE on nothing, so ${what} refuses it. Drop --token and the command brokers an `
+      + `agent seat token itself, or get one with \`ainarres seat-token\`.`;
+  }
+  if (role && role !== "oversight") {
+    return `the token's role is \`${role}\`, which has no EXECUTE on ${what}. `
+      + `\`ainarres seat-token\` issues an agent credential; the oversight-only verbs `
+      + `(set_permanent_ban, lift_ban, raise_audit_flag) stay the owner's.`;
+  }
+  return `the token's role has no EXECUTE on ${what} — check which credential you passed.`;
+}
+
 // Pure, deterministic seconds until expiry given a token and a reference time
 // (in epoch seconds). No I/O, no clock — same inputs → same output. May be negative.
 export function secondsToExpiry(token, nowSeconds) {
@@ -1371,6 +1398,11 @@ const COMMANDS = {
       p_reason: values.reason ?? null,
       p_detail: detail,
     }, tok);
+    if (!r.httpOk) {
+      let hint = null;
+      try { hint = permissionHint(r.body, decodeClaims(tok)); } catch { /* never fail on a hint */ }
+      if (hint) process.stderr.write(`ainarres: operator-log — ${hint}\n`);
+    }
     emit(r.body, r.httpOk);
   },
 

@@ -125,6 +125,40 @@ competence.** Two distinct points:
   Blending them would let M21 ban a family for burning tokens, which is a **routing** decision
   (v7+, and *that* is the layer that may price tokens in USD), not a governance one.
 
+**D3 amendment (v8, 2026-08-29) — spend follows the work that EARNED it, not the work it
+finished on.** The view resolved a usage event's capability as the family's **most recent**
+transition on that task at or before the event. That is right for a sweep that crosses one
+stage, which is nearly every sweep — and wrong for the one that does not. The first Hermes run
+(2026-08-29, PR #146) produced the counter-example: `grok+grok-4.6` merged
+(`integrating→validating`, `role:integrator`) and then confirmed the merge green
+(`validating→done`, `role:reviewer`) inside **one** harness invocation, reporting usage once at
+the end. All 52,536 tokens were booked to `role:reviewer`; `role:integrator` was left with no
+usage row at all.
+
+The damage is not the missing number — it is what the missing number **says**. D1's whole
+contract is that an unmeasured family reads `unknown`, never `0`: *unknown ≠ free*. Here
+`unknown` was neither. The spend existed, was captured, and was filed under a neighbour, and
+nothing in the view distinguishes "we did not measure this" from "we measured it and attributed
+it wrong". The second reading is worse, because it also **inflates the neighbour** — a reviewer
+whose `tokens_per_delivery` carries a merge it never performed is being described as expensive
+for someone else's work, which is exactly the misreading D3's spend/competence separation
+exists to prevent.
+
+As amended, the charge goes to the **first role-bearing transition of the sweep**. The sweep
+window is bounded below by that family's **previous usage report on the same task** — usage is
+reported once per sweep, so the previous report is precisely where this sweep begins. Without
+that bound, "first" would reach back into an earlier sweep and an implementer that was rejected
+and re-implemented would have every later sweep charged to its first transition forever.
+
+Two properties worth stating, because they are what make this safe to apply to history:
+
+- **View-only.** No table, no verb, no grant. `api.record_usage` writes the same event, the
+  driver still reports once per sweep. It is a *reading* of existing rows, so the correction is
+  retroactive — the Hermes run re-reads correctly the moment the migration lands.
+- **Still no blending.** This moves spend between capabilities; it never moves spend into
+  competence. A family that spent a lot integrating is *expensive at integrating* — which is
+  the sentence the signal was failing to be able to say.
+
 **D4 — A failure credits the PRODUCING family, per `(family, capability)`.** A reject is called
 by a reviewer/integrator, but the family being judged is the **producer** whose work bounced —
 "who advanced *into* the stage that was then rejected" (the implementer who did
