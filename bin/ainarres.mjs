@@ -15,7 +15,14 @@ import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 
 const BASE = (process.env.AINARRES_BASE_URL || "http://localhost:3010").replace(/\/$/, "");
-const SECRET = process.env.JWT_SECRET || "ainarres-dev-only-secret-change-me-min-32-chars";
+// The signing key. The dev default keeps a bare checkout usable, but it is not a key:
+// a token signed with it is accepted only by a substrate that is also running without
+// one. Remember WHERE the value came from, so the seat's self-mint fallback (v8 step 3)
+// can refuse out loud instead of minting an unverifiable token and handing the operator
+// an opaque 401 from PostgREST. See seatToken().
+const DEV_SECRET = "ainarres-dev-only-secret-change-me-min-32-chars";
+const HAVE_SIGNING_KEY = (process.env.JWT_SECRET ?? "").trim() !== "";
+const SECRET = HAVE_SIGNING_KEY ? process.env.JWT_SECRET : DEV_SECRET;
 
 const b64url = (s) => Buffer.from(s).toString("base64url");
 
@@ -997,6 +1004,20 @@ export async function brokerToken({ role = "agent", ttl = 300, reason = null, va
 async function seatToken({ role = "agent", features = [], ttl = 300, reason = null, values = {}, family = OPERATOR_FAMILY } = {}) {
   const brokered = await brokerToken({ role, ttl, reason, values });
   if (brokered) return { token: brokered, brokered: true };
+  // No broker AND no key: there is nothing to sign with. Falling back here would mint
+  // with DEV_SECRET and the substrate would answer 401 with no hint as to why — the
+  // failure a seat is least equipped to diagnose, because it cannot see the key it
+  // does not have. Name both halves instead; one of them is the thing to fix.
+  if (!HAVE_SIGNING_KEY) {
+    const port = values["broker-port"] ?? process.env.BROKER_PORT ?? "3021";
+    fail(
+      `no seat credential: no broker answered on 127.0.0.1:${port} (no broker key readable, `
+      + "or nothing listening) and JWT_SECRET is unset, so there is nothing to sign with. "
+      + "Ask the owner to run `make broker-serve` (it writes loop/run/broker.psk), or point "
+      + "BROKER_PSK / BROKER_PSK_FILE at the key. Minting locally is NOT the fix — the seat "
+      + "is not meant to hold the signing key.",
+    );
+  }
   return {
     token: mintJwt({ sub: randomUUID(), family, role, features }, ttl),
     brokered: false,
@@ -1154,6 +1175,17 @@ const COMMANDS = {
       ttl: { type: "string" },
     });
     if (!values.family) fail("token: --family is required");
+    // Signing with DEV_SECRET is legitimate on a bare checkout whose substrate has no
+    // key either. It is a trap everywhere else — the token mints fine and the substrate
+    // answers 401 with nothing pointing at the signature. Say so once, on stderr, so the
+    // JSON on stdout stays machine-readable.
+    if (!HAVE_SIGNING_KEY) {
+      process.stderr.write(
+        "ainarres: JWT_SECRET is unset — signing with the dev-only default. Any substrate "
+        + "configured with a real key will answer 401. If you are the operator seat, ask the "
+        + "credential broker instead: `ainarres seat-token`.\n",
+      );
+    }
     const features = (values.features ?? "").split(",").map((s) => s.trim()).filter(Boolean);
     const claims = {
       sub: values.sub ?? randomUUID(),
@@ -1359,6 +1391,10 @@ const COMMANDS = {
     } catch (_) {
       // file absent or unparseable → not-running
     }
+    // --json hands back the raw status file (or `null` when there is none) so a caller
+    // that must BRANCH on the state — an operator seat deciding whether to stop the
+    // service — is not parsing the human line. Same file, no interpretation.
+    if (values.json) return emit(parsed ?? { running: false, pid: null });
     process.stdout.write(formatServiceStatus(parsed) + "\n");
   },
 
@@ -1550,7 +1586,7 @@ const OPTS = {
   "operator-actions": { limit: { type: "string" }, token: { type: "string" } },
   "seat-token": { role: { type: "string" }, ttl: { type: "string" }, reason: { type: "string" }, "broker-psk": { type: "string" }, "broker-port": { type: "string" }, "broker-url": { type: "string" }, json: { type: "boolean" } },
   "operator-credentials": { limit: { type: "string" }, token: { type: "string" } },
-  "service-status": { file: { type: "string" } },
+  "service-status": { file: { type: "string" }, json: { type: "boolean" } },
   status: { lane: { type: "string" }, limit: { type: "string" }, watch: { type: "boolean" }, interval: { type: "string" }, compact: { type: "boolean" }, json: { type: "boolean" }, token: { type: "string" } },
   events: { lane: { type: "string" }, task: { type: "string" }, family: { type: "string" }, type: { type: "string" }, limit: { type: "string" }, json: { type: "boolean" }, token: { type: "string" } },
   report: { lane: { type: "string" }, limit: { type: "string" }, json: { type: "boolean" }, token: { type: "string" } },
@@ -1588,7 +1624,7 @@ const USAGE = `ainarres — agent CLI (verbs over PostgREST)
   demand              v7.1 pending work by required-capability bundle (what to wake) — oversight/monitor token
   governance-status   v5 governance state (banned/permanent/heal_at) per (family, capability) — oversight token
   status  [--lane L] [--limit N] [--watch [--interval 2]]   one-glance oversight summary (board + active + abandoned + why-stuck)
-  service-status  [--file PATH]   v7 standing-service liveness readout (reads loop/run/service.status; no token/network)
+  service-status  [--file PATH] [--json]   v7 standing-service liveness readout (reads loop/run/service.status; no token/network)
   events  [--lane L] [--task UUID] [--family F] [--type X] [--limit N] [--json]   event timeline joined to the acting family
   report  [--lane L] [--limit N]   end-of-run report: shipped (PRs) · failed · escalations · activity by family
   record-usage  --actor SUB (--from-log PATH --family F | --data JSON) [--sweep ID] [--task UUID]   stamp a sweep's token spend (driver/oversight; tokens only, no USD)

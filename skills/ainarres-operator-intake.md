@@ -29,10 +29,21 @@ The swarm's board is the **loop** substrate. `set -a; source loop.env; set +a` s
 or the swarm at it.** (`3010` appears as the CLI/intake-server fallback default for an
 unsourced shell; `make intake-serve` sources `loop.env`, so it targets `3011`.)
 
-## Token minting
+## Getting a token
 
-Every substrate action needs a signed JWT. You hold `JWT_SECRET` (from `loop.env`), so mint
-locally:
+Every substrate action needs a signed JWT.
+
+**If you are the operator seat, ask the envelope** — you are not meant to hold the key:
+
+```bash
+TOK=$(ainarres seat-token --reason "intake")                  # role agent, the seat's features
+MON=$(ainarres seat-token --role monitor --reason "reading")  # read-only, for the views
+```
+
+`ainarres intake` and `ainarres refine` do this for you; you rarely need the token by hand.
+
+**The rest of this section is the OWNER's path.** It needs `JWT_SECRET` (from `loop.env`),
+which the seat does not have:
 
 ```bash
 mint() {   # mint <family> <comma-separated features>
@@ -93,13 +104,18 @@ step. This creates a task on the `intake` lane in stage `proposed_brief` as the 
 by design (`.agents/design/intake.md` D5); a real Customer↔Intaker dialog is a later slice. A
 brief that is POSTed and left alone sits in `proposed_brief` indefinitely.
 
-So you do it — one command, which self-mints the **operator seat's** token (you hold
-`JWT_SECRET`):
+So you do it — one command, running as the **operator seat** (it asks the credential broker
+for the token and falls back to signing only if the owner's key is present):
 
 ```bash
 ainarres refine <brief-id> --note "brief refined"
-ainarres refine                                    # no id: refines whatever is claimable
 ```
+
+**Pass the brief id.** Bare `ainarres refine` claims *whatever is claimable on the lane*, which
+on a board with more than one open brief is reliably not the one you meant — it has already gone
+wrong twice. Get the id from `ainarres report` (the intake block) or from the line `ainarres
+intake` printed when the brief was submitted. Bare `refine` is for a board you have just looked
+at and know holds exactly one.
 
 That claims the brief and advances `proposed_brief → briefed`, which is what releases it to
 the standing designer. It runs as `agent+operator`, so the `claimed` and `transition` events

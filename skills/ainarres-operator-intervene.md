@@ -42,9 +42,13 @@ exactly what that view is for.
 
 ## Token minting (the fallback, and the owner's own path)
 
-You hold `JWT_SECRET` (from `loop.env`), so mint locally. First
-`set -a; source loop.env; set +a` (→ `AINARRES_BASE_URL=http://localhost:3011`, the loop
-substrate; `3010` is the test substrate).
+**"You" in this section is the OWNER, not the seat.** Minting needs `JWT_SECRET` (from
+`loop.env`), and the seat is deliberately not near it — that is the whole point of the envelope
+above. If you are the seat and `ainarres seat-token` gives you nothing, the answer is *ask the
+owner to start the broker*, not *find the key*. The CLI will tell you which half is missing.
+
+For the owner: `set -a; source loop.env; set +a` (→ `AINARRES_BASE_URL=http://localhost:3011`,
+the loop substrate; `3010` is the test substrate), then:
 
 ```bash
 mint() {   # mint <family> <agent|oversight> <features> [sub]
@@ -83,7 +87,7 @@ restore). Both append to `app.governance_actions`. **Temporary** bans are the su
 reflexive mechanism (M21) — never hand-set them.
 
 **A task stuck under another agent's claim.** There is no operator *verb* for this: `release_task`
-and `block_task` both require `claimed_by = sub`. But you hold `JWT_SECRET`, so you can mint a
+and `block_task` both require `claimed_by = sub`. The owner holds `JWT_SECRET`, so they can mint a
 token **with that agent's `sub`** and release as them — exactly what the driver's
 `loop/driver-lib.sh::release_stranded` does after a sweep ends holding a task:
 
@@ -102,12 +106,36 @@ be aware you are spending an attempt.
 **Blocked tasks.** `unblock_task` needs only `lane:<lane>`:
 
 ```bash
-TOK=$(mint agent+operator agent lane:dev)
+TOK=$(ainarres seat-token --reason "unblock: dependency resolved")   # the seat's own path
 node bin/ainarres.mjs unblock <task-id> --note "operator: dependency resolved" --token "$TOK"
 ```
 
-**Service runtime (operator context).** `make service` (start, foreground), `make service-stop`
-(SIGTERM → drains the in-flight activation, then halts), `make service-status`.
+**Service runtime (operator context).** Know which of these you can actually drive.
+
+| | Command | The seat? |
+| --- | --- | --- |
+| status | `ainarres service-status` | **yes** — reads `loop/run/service.status`, touches nothing |
+| stop | SIGTERM to the pid in that status file | **yes** — drains the in-flight activation, then halts |
+| start | `make service` | **no — ask the owner** |
+
+```bash
+ainarres service-status                       # state, pid, last activation
+# stop: the pid comes from the status file; this is exactly what `make service-stop` does
+pid=$(ainarres service-status --json | node -e 'let b="";process.stdin.on("data",d=>b+=d).on("end",()=>process.stdout.write(String(JSON.parse(b).pid||"")))')
+[ -n "$pid" ] && kill -TERM "$pid" && ainarres operator-log --action service_stop --target "the standing service"
+```
+
+**Why start is the owner's.** `make service` runs **in the foreground** — a seat that starts it
+that way blocks until the service dies, and then the service dies with the seat. There is no
+non-`make` start path yet (ADR 0028 lists one as in scope, unbuilt). Starting it the other
+obvious way — `bash loop/service.sh` — first sources `loop.env`, which holds `JWT_SECRET`; the
+seat is not supposed to be near that. So: **ask the owner to start the service**, and log the ask
+(`--action service_start_requested --outcome refused`) so the gap shows up in the ledger rather
+than only in your reasoning.
+
+Note also that `make` is deny-listed on a *loop harness*'s `PATH` (`loop/guard-bin/`, the
+2026-07-04 board wipe). You may not be running behind that guard — which makes the destructive
+targets your responsibility, not the shim's. See the last rule below.
 
 ## Rules
 

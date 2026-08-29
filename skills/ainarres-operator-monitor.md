@@ -91,7 +91,10 @@ Run a monitoring pass on a regular cadence or on demand. Produce a concise repor
 
 5. **Service runtime**
    - Whether the supervisor process is alive and responsive.
-   - Use `ainarres service-status` / `make service-status` (reads `loop/run/service.status`).
+   - `ainarres service-status` (reads `loop/run/service.status`; no token, no network). Add
+     `--json` when you need to branch on the state rather than read it. `make service-status`
+     is the same thing for the owner — prefer the CLI form, which works behind the harness
+     command guard and does not depend on a `make` you may not be allowed to run.
 
 6. **Expense / token health** (cost-control monitoring)
    - Shipped today: `api.spend_anomalies`, `api.family_track_record`, and `ainarres report` for

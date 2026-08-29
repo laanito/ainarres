@@ -1,6 +1,6 @@
 # ADR 0025 — v7 security posture: a local service, lightly authenticated (the gate, up front)
 
-- Status: Accepted
+- Status: Accepted (amended 2026-08-29 by [0028](0028-v8-scope-the-agent-operator-seat.md) — a third actor class)
 - Date: 2026-08-16
 - Builds on: [0024](0024-v7-scope-the-standing-service.md) (v7 — the standing local service;
   this ADR is its companion posture gate), [0015](0015-egress-as-capability.md) (egress as a
@@ -183,3 +183,88 @@ stage is a deliberate, bounded step, and the price of widening is written down, 
   shape; the liveness signal) within this posture. The build split follows
   [0024](0024-v7-scope-the-standing-service.md): the auth + channel + spawn/stop lifecycle are
   **assisted, mock-verified before live**; the pure surfaces are swarm-built.
+
+## Amendment (v8 — [ADR 0028](0028-v8-scope-the-agent-operator-seat.md), 2026-08-29) — a third actor class
+
+**The perimeter is unchanged. The actor model is not.**
+
+This ADR drew its perimeter around two classes of actor: the **owner-human** (who starts the
+service, holds `JWT_SECRET`, and is the backstop for anything the machinery will not do on its
+own) and the **workers** (declared families the supervisor spawns to claim tasks, each holding a
+narrow feature set). Every posture statement above assumes an actor is one or the other.
+
+v8 seats a third: an **agent operator** — an agent that is neither a worker nor the human. It does
+not claim delivery tasks and it is not spawned by the supervisor; it *operates the machine* the
+workers run in. Nothing about the perimeter moves for it (single-host, single-owner, loopback,
+same credentials, no new privileged identity, no new secret store), but three clauses above were
+written in the two-class vocabulary and now say something narrower than they appear to.
+
+### 1. "One class of human" still holds — because the seat is not a human
+
+Under *What this rules out* → **No multi-tenant identity**: still true, and unchanged. The seat is
+not a second human and not a tenant. It is a **registered family** (`agent+operator`), identified
+the same way every worker family is ([0007](0007-auth-identity-family-grant-deny.md)), and it
+appears in the record under its own name rather than borrowing one. What changes is only this: the
+sentence "there is one class of human — the owner" was doing double duty as "there are two kinds
+of actor." It never was a tenancy claim, and it is not one now.
+
+### 2. "No new trust in the workers" is intact; the seat is not a worker
+
+Under *What this rules out* → **No new trust in the workers**: the supervisor still spawns the same
+families with the same capabilities, and v8 grants **no new `capability:integrate`** and no new
+egress. The seat is outside that sentence entirely — nothing spawns it, it holds no
+`role:implementer` / `role:reviewer` / `tier:2`, and it holds neither `capability:integrate` nor
+`role:auditor`. Those four prohibitions are asserted in `test/operator-seat.test.ts`, so widening
+the seat fails the suite rather than quietly restating this ADR.
+
+### 3. The narrowing: "the human is the backstop" now names its levers
+
+This ADR leaned repeatedly on *the owner will be there* — implicitly, for anything unattended
+machinery declines to do. v8 makes that dependency **enumerable instead of ambient**. The human is
+the backstop for exactly:
+
+- **`api.set_permanent_ban` / `api.lift_ban`** — the irreversible capability levers (M22 D4),
+  `oversight`-only by EXECUTE grant.
+- **`api.raise_audit_flag`** — qualitative judgment (M22 D6), `role:auditor`, human-held.
+- **Key custody and provisioning** — who holds `JWT_SECRET`, and what
+  `app.family_features` says a family may carry.
+
+Everything else the owner used to do by hand — reading the board, refining a brief, starting work,
+recording what was done — is now *seatable*, and the seat does it under its own identity. This is a
+**narrowing of scope, not a widening of trust**: the human's role becomes smaller and sharper, and
+the three items above are the ones that stay human on purpose.
+
+### 4. Authentication for the third class: an envelope, not a key
+
+The two-class model had two answers for credentials: the human holds `JWT_SECRET` and signs; the
+supervisor mints worker tokens from `roles.sh` on the owner's behalf. Neither fits an actor that
+acts on its own initiative and should not hold the key.
+
+The seat's answer (v8 step 3) is a **credential envelope**: a loopback, PSK-authenticated broker
+(`bin/credential-broker.mjs`) holds `JWT_SECRET` and does nothing but sign; the **database** decides
+what may be in the token (`api.issue_operator_credential` — `reaper`-only; role ∈ {`agent`,
+`monitor`}; the family must hold `role:operator`; features are the provisioned snapshot, unedited;
+TTL capped; issuance recorded). This is the same posture this ADR already chose for ingress —
+**loopback + PSK, authenticated before anything is written** — applied to credential issuance
+rather than to intake. It adds no new secret store: the key lives where it already lived, in the
+owner's environment, and now sits behind a process instead of in every seat's reach.
+
+**The honest limit, on the record** (ADR 0028's own amendment, owner's explicit call): on a single
+host, a shell-capable seat can read `loop.env`. Nothing prevents it. The boundary v8 builds is
+**audited, not enforced** — `api.unbrokered_operator_acts` surfaces operator activity with no
+issuance behind it. OS-level isolation was considered and deliberately deferred; it belongs with
+the off-host operator, which is a heavier revision of this ADR (below).
+
+### What did *not* change
+
+- **The bind.** Loopback. The broker (`127.0.0.1:3021`) and the intake channel are the only listeners,
+  both PSK-authenticated, neither reachable off-host.
+- **The contract for widening.** Unchanged and still binding. An operator reaching the substrate
+  **across a network** is exactly the widening this ADR priced: TLS, a rotatable credential scheme
+  (a PSK file is not one), per-caller identity and authZ, rate limiting, and an egress re-review.
+  ADR 0028 defers the off-host operator for that reason. The third actor class is admitted **inside**
+  the existing perimeter; it does not move it.
+- **Defence in depth.** The substrate's own gates (the D4 create-gate, `effective_features`, the
+  EXECUTE grants on the human levers) remain the inner wall for the seat exactly as for the intake
+  channel. Verified before the seat is handed to anyone: 14/14 read views readable on a delegated
+  `monitor` credential, 5/5 human levers refused at the grant boundary.
