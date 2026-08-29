@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { permissionHint } from "../bin/ainarres.mjs";
 
 // v8 step 3 (ADR 0028) — the seat's LAST resort, tested where it actually bites.
 //
@@ -72,5 +73,49 @@ describe("`ainarres token` with no key", () => {
     );
     expect(r.status).toBe(0);
     expect(r.stderr).toBe("");
+  });
+});
+
+// ── The other half of "which credential am I holding" ────────────────────────────
+// Found by the first external operator (2026-08-29): `operator-log --token <monitor>`
+// answered `42501 permission denied for function record_operator_action`. The refusal is
+// CORRECT — the `monitor` coarse role has EXECUTE on nothing since v8 step 0 — but it
+// names the function and never the credential, so the caller cannot tell "I may not do
+// this" from "I am holding the wrong token for it". Same class as the missing-key trap
+// above: a correct failure that costs the agent a round of guessing.
+
+describe("permissionHint", () => {
+  const denied = (fn: string) => ({
+    code: "42501",
+    message: `permission denied for function ${fn}`,
+  });
+
+  it("names the read-only credential and the way out", () => {
+    const h = permissionHint(denied("record_operator_action"), { role: "monitor" });
+    expect(h).toContain("READ-ONLY");
+    expect(h).toContain("monitor");
+    expect(h).toContain("api.record_operator_action");
+    expect(h).toContain("seat-token");
+  });
+
+  it("for an agent token, points at the owner-only verbs instead", () => {
+    const h = permissionHint(denied("set_permanent_ban"), { role: "agent" });
+    expect(h).toContain("agent");
+    expect(h).toContain("api.set_permanent_ban");
+    expect(h).toContain("stay the owner's");
+    expect(h).not.toContain("READ-ONLY");
+  });
+
+  it("stays quiet for anything that is not a permission refusal", () => {
+    expect(permissionHint({ code: "PGRST202" }, { role: "monitor" })).toBeNull();
+    expect(permissionHint(null, { role: "monitor" })).toBeNull();
+    expect(permissionHint({ code: "42501" }, null)).toContain("check which credential");
+  });
+
+  it("is total — a malformed body or unreadable claims never throws", () => {
+    expect(() => permissionHint({ code: "42501", message: null }, {})).not.toThrow();
+    expect(() => permissionHint({}, undefined)).not.toThrow();
+    expect(permissionHint({ code: "42501", message: "no function named here" }, { role: "monitor" }))
+      .toContain("that verb");
   });
 });
