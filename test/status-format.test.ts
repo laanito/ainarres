@@ -475,6 +475,69 @@ describe("formatReport", () => {
     expect(out).toContain("0 rejected (n/a)");
   });
 
+  // ── v8 — empty-sweep spend (api.sweep_usage) ──────────────────────────────
+
+  test("sweep spend: formatReport({}) renders no sweep block, still renders every section, does not throw", () => {
+    const out = formatReport({});
+    expect(out).not.toContain("spend that moved nothing");
+    expect(out).toContain("shipped (");
+    expect(out).toContain("family track record");
+    expect(out).toContain("governance");
+    // The existing assertion that "  (none)" immediately follows the header still holds.
+    expect(out.match(/family track record[^\n]*\n\s+\(none\)/)).not.toBeNull();
+  });
+
+  test("sweep spend: single row renders header, row, and total", () => {
+    const out = formatReport({
+      sweepUsage: [{ family: "opencode+nemotron-3-ultra", sweeps: 41, tokens: 304210 }],
+    });
+    expect(out).toContain("spend that moved nothing (sweeps that claimed no task):");
+    expect(out).toContain("- opencode+nemotron-3-ultra: 304.2k over 41 sweep(s)");
+    expect(out).toContain("total: 304.2k spent claiming nothing");
+  });
+
+  test("sweep spend: two rows sum the total line", () => {
+    const out = formatReport({
+      sweepUsage: [
+        { family: "a", sweeps: 41, tokens: 304210 },
+        { family: "b", sweeps: 20, tokens: 140323 },
+      ],
+    });
+    expect(out).toContain("total: 444.5k spent claiming nothing");
+  });
+
+  test("sweep spend: tokens arriving as a STRING render identically to the number", () => {
+    const asNumber = formatReport({ sweepUsage: [{ family: "f", sweeps: 1, tokens: 304210 }] });
+    const asString = formatReport({ sweepUsage: [{ family: "f", sweeps: 1, tokens: "304210" }] });
+    expect(asString).toContain("- f: 304.2k over 1 sweep(s)");
+    expect(asString).toContain("total: 304.2k spent claiming nothing");
+    expect(asString).toBe(asNumber);
+  });
+
+  test("sweep spend: a row with family null renders the em dash", () => {
+    const out = formatReport({ sweepUsage: [{ family: null, sweeps: 2, tokens: 100 }] });
+    expect(out).toContain("- \u2014: 100 over 2 sweep(s)");
+  });
+
+  test("sweep spend: 12 rows render exactly 10 detail lines, total still covers all 12", () => {
+    const rows = Array.from({ length: 12 }, (_, i) => ({ family: `f${i}`, sweeps: 1, tokens: 1000 }));
+    const out = formatReport({ sweepUsage: rows });
+    const detailLines = out.split("\n").filter(l => /^  - f\d+: 1.0k over 1 sweep\(s\)$/.test(l));
+    expect(detailLines.length).toBe(10);
+    expect(out).toContain("total: 12.0k spent claiming nothing");
+  });
+
+  test("sweep spend: with a non-empty trackRecord, the separate-signal line comes AFTER the sweep block", () => {
+    const out = formatReport({
+      trackRecord: [{ family: "f", capability: "role:x", delivered: 1, rejected: 0, cross_family_rejected: 0, reject_rate: 0, total_tokens: 100 }],
+      sweepUsage: [{ family: "g", sweeps: 1, tokens: 50 }],
+    });
+    const sweepIdx = out.indexOf("spend that moved nothing");
+    const signalIdx = out.indexOf("(spend is a separate signal");
+    expect(sweepIdx).toBeGreaterThan(-1);
+    expect(signalIdx).toBeGreaterThan(sweepIdx);
+  });
+
   // ── Governance section (v5 — substrate-revoked capabilities) ─────────────
   test("temp ban: renders heal time from seconds_to_heal", () => {
     const out = formatReport({
@@ -1028,6 +1091,7 @@ describe("reportJson", () => {
       intake: { proposed: 0, briefed: 0, accepted: 0, open: [] },
       operator: { total: 0, failed: 0, actions: [] },
       operational: { health: [], spend: [], flags: [], stuck: [] },
+      sweepSpend: { total: 0, families: [] },
     });
   });
 
@@ -1055,6 +1119,7 @@ describe("reportJson", () => {
       intake: { proposed: 0, briefed: 0, accepted: 0, open: [] },
       operator: { total: 0, failed: 0, actions: [] },
       operational: { health: [], spend: [], flags: [], stuck: [] },
+      sweepSpend: { total: 0, families: [] },
     });
   });
 
@@ -1115,7 +1180,7 @@ describe("reportJson", () => {
     expect(result.auditFlags).toBe(auditFlags);
     expect(result.governanceActions).toBe(governanceActions);
     expect(result.shipped).toEqual([{ task_id: "s1", pr: null, implemented: null, reviewed: null, integrated: null, crossFamilyReview: false }]);
-    expect(Object.keys(result)).toEqual(["lane", "shipped", "trackRecord", "governance", "auditFlags", "governanceActions", "intake", "operator", "operational"]);
+    expect(Object.keys(result)).toEqual(["lane", "shipped", "trackRecord", "governance", "auditFlags", "governanceActions", "intake", "operator", "operational", "sweepSpend"]);
   });
 
   // ── M24 Slice B — intake watch (open briefs) ──────────────────────────────
@@ -1184,6 +1249,20 @@ describe("reportJson", () => {
     expect(capped.operator.actions.length).toBe(10);
     expect(capped.operator.actions[0]).toEqual({ family: "agent+operator", action: "refine", task_id: "t0", outcome: "ok" });
     expect(capped.operator.actions[9]).toEqual({ family: "agent+operator", action: "refine", task_id: "t9", outcome: "ok" });
+  });
+
+  // ── v8 — empty-sweep spend (api.sweep_usage) ──────────────────────────────
+
+  test("(9) sweepSpend field: a single row yields total and families unchanged", () => {
+    const row = { family: "f", sweeps: 2, tokens: 10 };
+    expect(reportJson({ sweepUsage: [row] }).sweepSpend).toEqual({
+      total: 10,
+      families: [row],
+    });
+  });
+
+  test("(9) sweepSpend field: empty input yields total 0, families []", () => {
+    expect(reportJson({}).sweepSpend).toEqual({ total: 0, families: [] });
   });
 });
 

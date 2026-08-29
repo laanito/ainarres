@@ -448,7 +448,7 @@ export function fmtDuration(interval) {
   return `${totalH}h ${m}m`;
 }
 
-export function formatReport({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [], spendAnomalies = [], operationalFlags = [], openBriefs = [], stuckTasks = [], operatorActions = [] } = {}, { lane = null } = {}) {
+export function formatReport({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [], spendAnomalies = [], operationalFlags = [], openBriefs = [], stuckTasks = [], operatorActions = [], sweepUsage = [] } = {}, { lane = null } = {}) {
   const lines = [lane ? `end-of-run report — lane ${lane}` : "end-of-run report — all lanes"];
 
   // What shipped: tasks at a terminal stage.
@@ -531,6 +531,29 @@ export function formatReport({ board = [], timeline = [], trackRecord = [], gove
         ` · tokens: ${fmtTokens(r.total_tokens)}${perDel}`,
       );
     }
+  }
+  // v8 — empty-sweep spend (api.sweep_usage): tokens burned by sweeps that claimed no
+  // task. A separate signal from competence — a family that burned tokens claiming
+  // nothing is EXPENSIVE, not failing (D3). Rendered whenever rows exist, INCLUDING
+  // when trackRecord is empty. The view is already ordered (tokens DESC) and grouped
+  // per family — do NOT re-sort or re-aggregate; its order is the contract.
+  if (sweepUsage.length > 0) {
+    lines.push("  spend that moved nothing (sweeps that claimed no task):");
+    // The total sums tokens across ALL rows passed in (the PRE-CAP sum), coercing
+    // each row's tokens with Number() and treating null/undefined/NaN as 0 so the
+    // sum never becomes NaN.
+    let sweepTotal = 0;
+    for (const r of sweepUsage) {
+      const tokens = Number(r.tokens);
+      sweepTotal += Number.isFinite(tokens) && !Number.isNaN(tokens) ? tokens : 0;
+    }
+    for (const r of sweepUsage.slice(0, 10)) {
+      const fam = r.family == null || r.family === "" ? "\u2014" : r.family;
+      lines.push(`  - ${fam}: ${fmtTokens(r.tokens)} over ${r.sweeps} sweep(s)`);
+    }
+    lines.push(`    total: ${fmtTokens(sweepTotal)} spent claiming nothing`);
+  }
+  if (trackRecord.length > 0) {
     lines.push("  (spend is a separate signal — a token-heavy but passing family is expensive, not failing)");
   }
 
@@ -716,7 +739,7 @@ export function formatReport({ board = [], timeline = [], trackRecord = [], gove
 // Pure, TOTAL JSON shaper for the end-of-run report. Same two-arg signature as
 // formatReport: rows in (already fetched), plain object out (no I/O, no clock,
 // never throws). Mirrors the same structure report --json will emit.
-export function reportJson({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [], spendAnomalies = [], operationalFlags = [], openBriefs = [], stuckTasks = [], operatorActions = [] } = {}, { lane = null } = {}) {
+export function reportJson({ board = [], timeline = [], trackRecord = [], governance = [], auditFlags = [], governanceActions = [], spendAnomalies = [], operationalFlags = [], openBriefs = [], stuckTasks = [], operatorActions = [], sweepUsage = [] } = {}, { lane = null } = {}) {
   const shipped = board
     .filter((r) => r.is_terminal === true)
     .map((row) => {
@@ -769,6 +792,18 @@ export function reportJson({ board = [], timeline = [], trackRecord = [], govern
       spend: spendAnomalies,
       flags: operationalFlags.slice(0, 10),
       stuck: stuckTasks.slice(0, 10),
+    },
+    // v8 — empty-sweep spend (api.sweep_usage): tokens burned by sweeps that claimed
+    // no task. total is the PRE-CAP token sum (a number, coercing each row's tokens
+    // with Number() and treating null/undefined/NaN as 0); families is the first 10
+    // rows passed through UNCHANGED — the JSON shape stays dumb (no reshaping, no
+    // coercion of the row objects).
+    sweepSpend: {
+      total: sweepUsage.reduce((sum, r) => {
+        const tokens = Number(r.tokens);
+        return sum + (Number.isFinite(tokens) && !Number.isNaN(tokens) ? tokens : 0);
+      }, 0),
+      families: sweepUsage.slice(0, 10),
     },
   };
 }
@@ -1491,7 +1526,10 @@ const COMMANDS = {
     // v8: operator_actions is unfiltered, limit=25, NO order= param (the view is
     // already newest-first) and degrades to [] — a substrate without the view
     // still yields a full report.
-    const [b, t, tr, gov, af, ga, sa, of, ob, st, oa] = await Promise.all([
+    // v8: sweep_usage is unfiltered with NO order= param (the view is already
+    // ordered tokens DESC) and degrades to [] — a substrate without the view
+    // still yields a full report.
+    const [b, t, tr, gov, af, ga, sa, of, ob, st, oa, su] = await Promise.all([
       restGet(`board?${boardQ}`, token),
       restGet(`timeline?${tlQ}`, token),
       restGet(`family_track_record?order=family.asc,capability.asc`, token),
@@ -1503,6 +1541,7 @@ const COMMANDS = {
       restGet(`open_briefs?order=created_at.desc`, token),
       restGet(`stuck_tasks`, token),
       restGet(`operator_actions?limit=25`, token),
+      restGet(`sweep_usage`, token),
     ]);
     for (const r of [b, t]) {
       if (!r.httpOk) { emit(r.body ?? { ok: false, code: "http_error", status: r.status }, false); return; }
@@ -1516,10 +1555,11 @@ const COMMANDS = {
     const openBriefs = ob.httpOk && Array.isArray(ob.body) ? ob.body : [];
     const stuckTasks = st.httpOk && Array.isArray(st.body) ? st.body : [];
     const operatorActions = oa.httpOk && Array.isArray(oa.body) ? oa.body : [];
+    const sweepUsage = su.httpOk && Array.isArray(su.body) ? su.body : [];
     if (values.json) {
-      process.stdout.write(`${JSON.stringify(reportJson({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions, spendAnomalies, operationalFlags, openBriefs, stuckTasks, operatorActions }, { lane }), null, 2)}\n`);
+      process.stdout.write(`${JSON.stringify(reportJson({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions, spendAnomalies, operationalFlags, openBriefs, stuckTasks, operatorActions, sweepUsage }, { lane }), null, 2)}\n`);
     } else {
-      process.stdout.write(`${formatReport({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions, spendAnomalies, operationalFlags, openBriefs, stuckTasks, operatorActions }, { lane })}\n`);
+      process.stdout.write(`${formatReport({ board: b.body, timeline: t.body, trackRecord, governance, auditFlags, governanceActions, spendAnomalies, operationalFlags, openBriefs, stuckTasks, operatorActions, sweepUsage }, { lane })}\n`);
     }
   },
 
