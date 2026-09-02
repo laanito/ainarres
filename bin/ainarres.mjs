@@ -830,9 +830,28 @@ function reasonOf(ev) {
 // split on "." and the middle segment is base64url-decoded then JSON-parsed.
 // Intentionally local-only: no network, no DB, no cryptographic verification.
 export function decodeClaims(token) {
-  const [, payloadB64] = token.split(".");
-  const json = Buffer.from(payloadB64, "base64url").toString("utf8");
-  return JSON.parse(json);
+  if (typeof token !== "string") {
+    throw new Error(`malformed token: expected a string, got ${typeof token}`);
+  }
+  const parts = token.split(".");
+  if (parts.length < 3) {
+    throw new Error(`malformed token: expected 3 segments, got ${parts.length}`);
+  }
+  const payloadB64 = parts[1];
+  if (payloadB64 === "") {
+    throw new Error("malformed token: empty payload segment");
+  }
+  let json;
+  try {
+    json = Buffer.from(payloadB64, "base64url").toString("utf8");
+  } catch {
+    throw new Error("malformed token: invalid base64url in payload");
+  }
+  try {
+    return JSON.parse(json);
+  } catch (e) {
+    throw new Error(`malformed token: invalid JSON payload`);
+  }
 }
 
 // A PostgREST `42501 permission denied for function …` is a correct refusal with an
