@@ -8,4 +8,22 @@ describe("decodeClaims", () => {
     const token = `header.${segment}.sig`;
     expect(decodeClaims(token)).toEqual(payloadObj);
   });
+
+  test("throws on non-string input", () => {
+    expect(() => decodeClaims(null)).toThrow(/malformed token/);
+  });
+
+  test("throws on token with fewer than 3 segments", () => {
+    expect(() => decodeClaims("not-a-jwt")).toThrow(/malformed token/);
+    expect(() => decodeClaims("a.b")).toThrow(/malformed token/);
+  });
+
+  test("throws on empty payload segment", () => {
+    expect(() => decodeClaims("a..c")).toThrow(/malformed token/);
+  });
+
+  test("throws on non-JSON payload", () => {
+    const payload = Buffer.from("notjson").toString("base64url");
+    expect(() => decodeClaims(`header.${payload}.sig`)).toThrow(/malformed token/);
+  });
 });
