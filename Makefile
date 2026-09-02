@@ -9,7 +9,8 @@ COMPOSE_LOOP := docker compose -p ainarres-loop --env-file loop.env
 
 .PHONY: up down reset migrate seed test verify-down logs ps \
         loop-up loop-down loop-wipe loop-seed loop-reset loop-ps loop-logs verify-isolation \
-        service service-stop service-status service-selftest intake-serve
+        service service-stop service-status service-selftest intake-serve \
+        push-wake-selftest
 
 ## Bring the stack up (db → migrate → postgrest) and wait for db health.
 up:
@@ -141,6 +142,12 @@ service-status:
 ## no database, no ports.
 demand-gate-selftest:
 	@bash loop/demand-gate-selftest.sh
+
+## Pin the push-wake primitives (M28 Slice B) with NO substrate: stub the LISTEN stream
+## and drive idle_wait directly. Safe to run while a real service is up — it touches no
+## docker, no database, no ports.
+push-wake-selftest:
+	@bash loop/push-wake-selftest.sh
 
 ## Deterministic lifecycle test (MOCK): a fresh loop substrate + the standing service —
 ## idles empty, wakes on inserted work, drains, idles again, second activation with NO
