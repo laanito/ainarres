@@ -12,7 +12,13 @@
 #      task's capabilities ask for, sizes the implementer pool to the count waiting, and
 #      names UNSERVICEABLE demand predictively instead of spawning a fleet to discover it;
 #   6. CONSUME GOVERNANCE — a temp-banned family is skipped, the board still drains;
-#   7. GRACEFUL STOP — SIGTERM halts it cleanly (exit 0), status → `stopped`.
+#   7. GRACEFUL STOP — SIGTERM halts it cleanly (exit 0), status → `stopped`;
+#   8. PUSH-WAKE (ADR 0027) — a task inserted into an idle service with a long poll
+#      wakes it in ≪ the interval (notification, not the tick);
+#   9. LISTEN OFF — with LOOP_PUSH_WAKE=0 the board still drains via the poll, the
+#      degrade is visible, the supervisor stays alive;
+#  10. LEASE-EXPIRY RECLAIM — a task whose lease has lapsed (no notification) is still
+#      picked up by the poll backstop.
 #
 # Run via `make service-selftest` (which loop-resets first) with LOOP_MODE=mock. It does
 # NOT do real git/gh — the mock harness records references only (the loop substrate is a
@@ -120,6 +126,44 @@ create_tasks() {
       --payload "$(node -e 'process.stdout.write(JSON.stringify({goal:"mock svc task #"+process.argv[1],instructions:"noop",files:[],validate:"true",acceptance:"board drains to done"}))' "$i")" \
       >/dev/null || fail "create task #$i failed"
   done
+}
+
+# First non-terminal, unblocked dev-board task id (node -e, same style as n_active).
+first_active_id() {
+  board_json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{r=[]}if(!Array.isArray(r))r=[];const t=r.find(x=>!x.is_terminal&&!x.blocked);process.stdout.write(t?String(t.task_id||""):"")})'
+}
+
+# Start a FRESH supervisor. The invocation's environment is inherited (so
+# `LOOP_IDLE_POLL_SECS=30 start_supervisor idle "$log"` lengthens the poll for THIS
+# process only). </dev/null as at the original start — loop_psql attaches to stdin.
+# $1 = status-file state to wait for (empty = just wait for the file to appear).
+# $2 = log file (phase-specific so a failure is diagnosable).
+start_supervisor() {
+  local want_state="${1:-}" log="${2:-$SVC_LOG}"
+  [ -z "${SVC_PID:-}" ] || fail "start_supervisor: already running pid=$SVC_PID"
+  rm -f "$STATUS"
+  bash "$HERE/service.sh" >"$log" 2>&1 </dev/null &
+  SVC_PID=$!
+  echo "→ service-selftest: started supervisor pid=$SVC_PID (log=$log)"
+  wait_until 15 bash -c '[ -s "'"$STATUS"'" ]' \
+    || fail "supervisor pid=$SVC_PID never wrote a status file"
+  if [ -n "$want_state" ]; then
+    wait_until 20 is_state "$want_state" \
+      || fail "supervisor pid=$SVC_PID did not reach '$want_state' (state='$(svc_field state)')"
+  fi
+}
+
+# SIGTERM + wait for state=stopped. Leaves no supervisor behind (phases 8-10).
+stop_supervisor() {
+  [ -n "${SVC_PID:-}" ] || return 0
+  echo "→ service-selftest: SIGTERM pid=$SVC_PID"
+  kill -TERM "$SVC_PID" 2>/dev/null || true
+  wait_until 20 bash -c '! kill -0 '"$SVC_PID"' 2>/dev/null' \
+    || fail "supervisor pid=$SVC_PID did not exit within 20s of SIGTERM"
+  wait "$SVC_PID" 2>/dev/null || true
+  wait_until 10 is_state stopped \
+    || fail "status file not 'stopped' after SIGTERM (state='$(svc_field state)')"
+  SVC_PID=""
 }
 
 # The intake channel's identity (ADR 0025): a human/external family holding ONLY
@@ -365,4 +409,59 @@ svc_rc=0; wait "$SVC_PID" 2>/dev/null || svc_rc=$?
 SVC_PID=""   # reaped; don't let cleanup kill an unrelated pid
 pass "Phase 7 — SIGTERM drained + halted cleanly (exit 0, state=stopped)"
 
-echo "✓ service-selftest: standing service lifecycle PASSED (idle → wake → drain → idle → second activation → clean stop)."
+# ── Phase 8: PUSH-WAKE (ADR 0027 criterion 1) ─────────────────────────────────
+# A FRESH supervisor with a deliberately LONG poll, parked in idle_wait. One
+# inserted task must wake it in ≪ the interval — a wake that merely happened
+# cannot pass; it must have beaten the tick.
+board_empty || fail "Phase 8: board not drained before the push-wake proof (active=$(n_active))"
+P8_LOG="$RUN_DIR/service-selftest.p8.log"
+LOOP_IDLE_POLL_SECS=30 start_supervisor idle "$P8_LOG"
+P8_T0="$(date +%s)"
+P8_ACT0="$(svc_field activation)"
+create_tasks 1
+p8_woke() { [ "$(svc_field activation)" -gt "$P8_ACT0" ] || [ "$(svc_field state)" != "idle" ]; }
+wait_until 10 p8_woke \
+  || fail "Phase 8: supervisor did not react within 10s (state='$(svc_field state)' activation=$(svc_field activation))"
+P8_ELAPSED=$(( $(date +%s) - P8_T0 ))
+[ "$P8_ELAPSED" -lt 10 ] \
+  || fail "Phase 8: wake took ${P8_ELAPSED}s with a 30s poll — did not beat the tick"
+pass "Phase 8 — woke in ${P8_ELAPSED}s with a 30s poll — push-wake (not the tick)"
+wait_until 120 board_all_done \
+  || fail "Phase 8: board did not drain after the push-wake (active=$(n_active), terminal=$(n_terminal)/$(n_total))"
+stop_supervisor
+
+# ── Phase 9: LISTEN OFF, IDENTICAL TO V7 (ADR 0027 criterion 2) ───────────────
+# Correctness never depends on a notification: with the LISTEN path off the board
+# still drains via the poll, the degrade is VISIBLE, the supervisor stays alive.
+P9_LOG="$RUN_DIR/service-selftest.p9.log"
+LOOP_PUSH_WAKE=0 LOOP_IDLE_POLL_SECS=2 start_supervisor idle "$P9_LOG"
+grep -q "push-wake disabled — interval poll only" "$P9_LOG" \
+  || fail "Phase 9: degrade not visible in the log (expected the disabled-state line in $P9_LOG)"
+create_tasks 2
+wait_until 180 board_all_done \
+  || fail "Phase 9: board did not drain with push-wake off (active=$(n_active), terminal=$(n_terminal)/$(n_total))"
+kill -0 "$SVC_PID" 2>/dev/null || fail "Phase 9: supervisor died with push-wake off"
+stop_supervisor
+pass "Phase 9 — LISTEN off: board drained via the poll, degrade visible, supervisor stayed alive"
+
+# ── Phase 10: LEASE-EXPIRY RECLAIM (ADR 0027 criterion 3) ─────────────────────
+# The poll backstop covers the claimable transition that fires NO notification:
+# a task whose lease has lapsed (lazy reclaim, ADR 0009). The trigger ignores
+# claimed_by / lease_expires_at, so push-wake must not strand this work.
+create_tasks 1
+P10_ID="$(first_active_id)"
+[ -n "$P10_ID" ] || fail "Phase 10: create_tasks 1 left no active task id on the board"
+loop_psql -c "
+  update app.tasks
+     set claimed_by = gen_random_uuid(),
+         lease_expires_at = now() - interval '1 hour'
+   where id = '$P10_ID'::uuid;
+" >/dev/null || fail "Phase 10: could not stamp a past lease_expires_at on $P10_ID"
+P10_LOG="$RUN_DIR/service-selftest.p10.log"
+LOOP_IDLE_POLL_SECS=3 start_supervisor "" "$P10_LOG"
+wait_until 180 board_all_done \
+  || fail "Phase 10: abandoned task $P10_ID was not reclaimed via the poll (active=$(n_active), terminal=$(n_terminal)/$(n_total))"
+stop_supervisor
+pass "Phase 10 — lease-expiry reclaim still picked up via the poll backstop (no notification)"
+
+echo "✓ service-selftest: standing service lifecycle PASSED (idle → wake → drain → idle → second activation → clean stop → push-wake → listen-off → lease-reclaim)."
