@@ -8,7 +8,7 @@ COMPOSE := docker compose
 COMPOSE_LOOP := docker compose -p ainarres-loop --env-file loop.env
 
 .PHONY: up down reset migrate seed test verify-down logs ps \
-        loop-up loop-down loop-seed loop-reset loop-ps loop-logs verify-isolation \
+        loop-up loop-down loop-wipe loop-seed loop-reset loop-ps loop-logs verify-isolation \
         service service-stop service-status service-selftest intake-serve
 
 ## Bring the stack up (db → migrate → postgrest) and wait for db health.
@@ -67,8 +67,12 @@ ps:
 loop-up:
 	$(COMPOSE_LOOP) up -d
 
-## Tear the loop substrate down, including its data volume.
+## Stop the loop substrate. Keeps the named data volume (board, spend, operator ledger).
 loop-down:
+	$(COMPOSE_LOOP) down
+
+## Destroy the loop data volume. The only loop path that wipes.
+loop-wipe:
 	$(COMPOSE_LOOP) down -v
 
 ## Load the idempotent seed into the loop substrate's db.
@@ -78,7 +82,7 @@ loop-seed:
 	@echo "✓ loop seed loaded"
 
 ## Known-zero rebuild of the loop substrate (no test suite — see note above).
-loop-reset: loop-down loop-up loop-seed
+loop-reset: loop-wipe loop-up loop-seed
 	@echo "✓ loop reset complete"
 
 loop-ps:
