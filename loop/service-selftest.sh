@@ -435,11 +435,13 @@ stop_supervisor
 # still drains via the poll, the degrade is VISIBLE, the supervisor stays alive.
 P9_LOG="$RUN_DIR/service-selftest.p9.log"
 LOOP_PUSH_WAKE=0 LOOP_IDLE_POLL_SECS=2 start_supervisor idle "$P9_LOG"
-grep -q "push-wake disabled — interval poll only" "$P9_LOG" \
-  || fail "Phase 9: degrade not visible in the log (expected the disabled-state line in $P9_LOG)"
 create_tasks 2
 wait_until 180 board_all_done \
   || fail "Phase 9: board did not drain with push-wake off (active=$(n_active), terminal=$(n_terminal)/$(n_total))"
+# Grep AFTER the drain: stdout is redirected to a file so bash fully-buffers;
+# an immediate grep at idle can miss the disabled-state line (phases 4/5/6 grep late).
+grep -q "push-wake disabled — interval poll only" "$P9_LOG" \
+  || fail "Phase 9: degrade not visible in the log (expected the disabled-state line in $P9_LOG)"
 kill -0 "$SVC_PID" 2>/dev/null || fail "Phase 9: supervisor died with push-wake off"
 stop_supervisor
 pass "Phase 9 — LISTEN off: board drained via the poll, degrade visible, supervisor stayed alive"
