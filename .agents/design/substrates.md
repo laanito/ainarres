@@ -42,9 +42,11 @@ make up        # or: make reset   (down -v → up → seed → npm test)
 
 # Loop substrate: the board the v3 driver/pollers (M14) coordinate on.
 make loop-up        # db → migrate → postgrest on project ainarres-loop
-make loop-seed      # idempotent seed
-make loop-reset     # known-zero rebuild (NO suite — see below)
-make loop-ps        # status   ·   make loop-logs   ·   make loop-down
+make loop-seed      # idempotent seed (safe on a live board — does not wipe events)
+make loop-down      # stop containers, KEEP the data volume
+make loop-wipe      # destroy the loop volume — the only loop path that wipes
+make loop-reset     # loop-wipe → loop-up → loop-seed (known-zero; NO suite)
+make loop-ps        # status   ·   make loop-logs
 ```
 
 Both can be up simultaneously (different ports/volumes). The driver and pollers
