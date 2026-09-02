@@ -5,8 +5,9 @@
 # the board, and EXITS (batch), the service stands: it watches the loop board and, when
 # there is claimable work, runs ONE activation (the SAME run_activation the batch driver
 # uses — the round loop, verbatim, from driver-lib.sh), draining it; when the board is
-# empty it IDLES (sleeps, holding no workers) and wakes on the next poll. AINARRES stops
-# being a script you run and becomes a process that runs.
+# empty it IDLES (holding no workers) and wakes on the EARLIER of {a database
+# notification from the substrate's pg_notify trigger, the backstop poll interval}
+# (ADR 0027 D4/D5). AINARRES stops being a script you run and becomes a process that runs.
 #
 # It makes NO routing decision (ADR 0024 — demand-scaler, NEVER a router): its only
 # question is the board's, "is there claimable work?" (active > 0). The tiers self-claim
@@ -45,7 +46,7 @@ source "$HERE/roles.sh"
 
 LOOP_MAX_ROUNDS="${LOOP_MAX_ROUNDS:-20}"          # per-activation safety bound (D3)
 LOOP_POOL_SIZE="${LOOP_POOL_SIZE:-3}"             # concurrent cheap implementers per round
-LOOP_IDLE_POLL_SECS="${LOOP_IDLE_POLL_SECS:-15}"  # how often the idle service re-checks the board (D1)
+LOOP_IDLE_POLL_SECS="${LOOP_IDLE_POLL_SECS:-60}"  # backstop behind push-wake (D5): covers lease-expiry reclaim, dropped LISTEN, reachability (ADR 0027)
 
 # The lanes THIS entry point works (roles.sh defaults to (dev) for the batch driver). The
 # standing service also works `intake`: a brief the human intaker has refined to `briefed`
@@ -70,6 +71,12 @@ export LOOP_CONSUME_GOVERNANCE="${LOOP_CONSUME_GOVERNANCE:-1}"
 # The shared coordination primitives (board reads, spawn/reap, teardown, run_activation).
 # shellcheck disable=SC1090,SC1091
 source "$HERE/driver-lib.sh"
+
+# Push-wake: service-only infrastructure (ADR 0027 D4/D5). The batch driver does NOT source
+# this — the LISTEN lives only here for the standing supervisor. Requires RUN_DIR from
+# driver-lib.sh above.
+# shellcheck disable=SC1090,SC1091
+source "$HERE/push-wake.sh"
 
 mkdir -p "$RUN_DIR"
 SERVICE_STATUS_FILE="${SERVICE_STATUS_FILE:-$RUN_DIR/service.status}"
@@ -97,18 +104,24 @@ service_status() {
 # EXIT trap runs stop_active (kill any straggler subtree, gc worktrees) and marks stopped.
 DRAINING=0
 request_stop() { DRAINING=1; printf '\n→ service: stop requested — draining in-flight work, will halt…\n'; }
-on_exit() { stop_active; service_status stopped "halted"; }
+# on_exit: wake_listener_stop MUST come BEFORE stop_active. stop_active kills harness
+# subtrees; the listener (a psql/docker child) must be reaped first so no orphan outlives
+# the supervisor.
+on_exit() { wake_listener_stop; stop_active; service_status stopped "halted"; }
 trap 'request_stop' INT TERM
 trap 'on_exit' EXIT
 
 # ── Startup ───────────────────────────────────────────────────────────────────
 echo "→ service: loop substrate = ${AINARRES_BASE_URL} (mode=$LOOP_MODE)"
-echo "→ service: standing supervisor up (poll ${LOOP_IDLE_POLL_SECS}s; design: ${LOOP_DESIGN_TIERS[*]}; pool=${LOOP_POOL_SIZE}× '${LOOP_POOL_TIER}'; serial: ${LOOP_SERIAL_TIERS[*]}; frontier: ${LOOP_FRONTIER_PEERS[*]}; consume-governance=${LOOP_CONSUME_GOVERNANCE})"
+echo "→ service: standing supervisor up (poll ${LOOP_IDLE_POLL_SECS}s; push-wake=${LOOP_PUSH_WAKE:-1}|${WAKE_CHANNEL:-ainarres_activity}; design: ${LOOP_DESIGN_TIERS[*]}; pool=${LOOP_POOL_SIZE}× '${LOOP_POOL_TIER}'; serial: ${LOOP_SERIAL_TIERS[*]}; frontier: ${LOOP_FRONTIER_PEERS[*]}; consume-governance=${LOOP_CONSUME_GOVERNANCE})"
 echo "→ service: status file = ${SERVICE_STATUS_FILE}  ·  stop with: make service-stop (or SIGTERM)"
 
 # M27 (ADR 0026 D2): probe each configured tier's backend once, up front. "Configured" is not
 # "available" — a tier whose model was retired upstream must not be spawned into all day.
 build_capability_map
+# ADR 0027 D4: start the push-wake listener once at startup. Must not abort startup on
+# failure — wake_listener_start degrades gracefully to interval-poll-only.
+wake_listener_start
 service_status starting "supervisor up"
 
 # STALLED_SIG holds the board signature of a stuck board (set after a no-progress
@@ -128,7 +141,7 @@ while true; do
   if [ "$reachable" -ne 1 ]; then
     echo "⚠ service: loop board unreachable at ${AINARRES_BASE_URL} — holding idle, will retry."
     service_status idle "board unreachable"
-    sleep "$LOOP_IDLE_POLL_SECS" || true
+    idle_wait "$LOOP_IDLE_POLL_SECS" "board unreachable"
     continue
   fi
 
@@ -142,7 +155,7 @@ while true; do
   if [ "$active" -eq 0 ]; then
     STALLED_SIG=""
     service_status idle "$([ "$blocked" -gt 0 ] && echo "board drained; ${blocked} blocked awaiting a human" || echo "board drained")"
-    sleep "$LOOP_IDLE_POLL_SECS" || true
+    idle_wait "$LOOP_IDLE_POLL_SECS" "board drained"
     continue
   fi
 
@@ -157,7 +170,7 @@ while true; do
   compute_unserviceable
   if [ -n "$DEMAND" ] && ! has_serviceable_demand; then
     service_status idle "$(unserviceable_summary)"
-    sleep "$LOOP_IDLE_POLL_SECS" || true
+    idle_wait "$LOOP_IDLE_POLL_SECS" "unserviceable demand"
     continue
   fi
 
@@ -165,7 +178,7 @@ while true; do
   # no progress and nothing has changed since) → stay stalled, DON'T re-activate (D3).
   if [ -n "$STALLED_SIG" ] && [ "$sig" = "$STALLED_SIG" ]; then
     service_status stalled "board stuck: ${active} active make no progress — awaiting a human"
-    sleep "$LOOP_IDLE_POLL_SECS" || true
+    idle_wait "$LOOP_IDLE_POLL_SECS" "board stalled"
     continue
   fi
 
