@@ -1,6 +1,6 @@
 # ADR 0028 — v8 scope: the agent operator seat (the operator becomes attributable and bounded, never root)
 
-- Status: Proposed
+- Status: Accepted (2026-09-03 — steps 0–3 built and merged: #130 the read-only role, #131–#133 the preconditions, #138/#140 the seat identity + ledger, #144 the credential envelope; #145 the readiness pass, #147 the findings from the first external run. Two in-scope items remain unbuilt: the non-`make` service lifecycle, and success gate 5 — see the amendments below)
 - Date: 2026-08-27
 - Builds on: [0025](0025-v7-security-posture-local-service.md) (v7's posture — single-host,
   single-owner, **`human ≠ agent`**, "owner-started, owner-stoppable", and the explicit choice to

@@ -23,3 +23,13 @@ loop/run/
 # Per-sweep git worktrees for isolated parallel implementers (M17). Live checkouts
 # over the shared object store; created/torn down by loop/worktree.sh, never committed.
 .loop-worktrees/
+
+# dbmate's schema dump. The compose migrate step runs with --no-dump-schema on
+# purpose (docker-compose.yml): db/migrations/ is the source of truth and a dumped
+# snapshot only ever drifts from it. A stray db/schema.sql means someone ran dbmate
+# without that flag — ignore it rather than commit a second, staler truth.
+db/schema.sql
+
+# Stray REPL history from other local tools (contains typed prompts, not project
+# content).
+.lp-history

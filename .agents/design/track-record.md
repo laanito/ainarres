@@ -159,6 +159,34 @@ Two properties worth stating, because they are what make this safe to apply to h
   competence. A family that spent a lot integrating is *expensive at integrating* — which is
   the sentence the signal was failing to be able to say.
 
+**D3 amendment, part two (2026-09-03) — a sweep is not a task, so the first fix is not finished.**
+The amendment above charges the *first* role-bearing transition of a sweep instead of the last, and
+it is correct as far as it goes. It does not go far enough, and the run that proved it is the same
+run that first exercised a problem-shaped brief.
+
+One measured sweep (#150–#153, 2026-09-02): a single actor made **eleven transitions across two
+tasks and five capabilities** — reviewer, designer, implementer, integrator, reviewer — and filed
+**one** usage report. `api.record_usage` resolves the charged task from the actor's *last*
+transition, so the report anchors to one task; the view then picks the first role-bearing transition
+*on that task*. The result is that one `(family, capability)` carries the entire sweep and every
+other capability it exercised reads `unknown`. In the same run the designer filed a single report of
+5,053,327 tokens for a sweep that designed **two** slices, anchored wholly to one of them; the other
+records a delivery that apparently cost nothing. `tokens_per_delivery` is therefore dividing a
+sweep-level number by a transition-level count.
+
+**Why the first fix looked sufficient.** Its evidence came from runs where every sweep touched
+exactly one task — which held because the briefs were being written small enough to guarantee it,
+not because anything in the substrate did. A problem brief produces sweeps that drain whole regions
+of the board, and the assumption failed on first contact. The measurement was outgrown by the thing
+it measures.
+
+**The remaining fix is the option skipped in the first amendment: report usage PER TRANSITION, not
+per sweep.** That is a driver-side change (report as each transition is made, or report a
+per-transition breakdown) plus `api.record_usage` accepting it — not a view change, which is why it
+was deferred and why deferring it was wrong. Until it lands, treat per-capability spend as
+*attributable to a sweep, not to a capability*, and do not build cost-aware routing on it: routing
+on these numbers would prefer families on the strength of which transition happened to be first.
+
 **D4 — A failure credits the PRODUCING family, per `(family, capability)`.** A reject is called
 by a reviewer/integrator, but the family being judged is the **producer** whose work bounced —
 "who advanced *into* the stage that was then rejected" (the implementer who did

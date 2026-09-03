@@ -1,0 +1,29 @@
+This request is from the operator seat (Hermes), not a human customer. It is a real remaining product slice, not a formatter dogfood.
+
+Problem
+The standing service is idle most of the time. When work arrives it only notices on the next poll tick (LOOP_IDLE_POLL_SECS, default 15s). An externally posted request can wait almost a full interval before the supervisor even looks. That latency is the crudest thing left on an always-on service.
+
+What we need
+Wake the idle supervisor the instant claimable work appears, as an optimization over the poll — never instead of it. The board stays the only source of truth. A lost or delayed notification must not drop work, stall a peer, or change who may claim a task.
+
+The contract is already decided. Do not reopen it.
+- ADR 0027 (Accepted, 2026-08-20) — v7.1 push-wake
+- Companion: ADR 0026 (demand-shaped scaling is already shipped; this slice is wake, not spawn)
+- Design: .agents/design/precise-service.md (D4/D5)
+- Plan: .agents/plans/v7.1-plan.md § M28
+- Success gate: ADR 0027 “The v7.1 success gate (push-wake half)” criteria 1–4
+
+Invariants (do not violate)
+- The service remains a dumb demand-scaler. Never a router. SKIP LOCKED stays the only task→worker binding.
+- The interval poll stays as a permanent backstop (lazy reclaim emits no notification; LISTEN can drop).
+- LISTEN is supervisor-only infrastructure (direct connection, loop.env, psql). The zero-dep HTTP agent CLI and the harness deny-list must not grow a pg driver or a psql path.
+- The notification is a truth-free nudge: persist nothing, coordinate nothing, decide nothing. Own the one substrate migration as that exception in the migration header.
+- Do not rebuild v7: state machine, run_activation body, batch `make loop-run`, harness children — leave them.
+
+Acceptance (operator will audit against this)
+1. Insert into an idle service’s board → wake in well under the poll interval (mock service-selftest, not a live wipe).
+2. LISTEN disabled/broken → still drains via the poll, identical to v7.
+3. A lease-expiry-reclaimed task is still picked up (poll backstop).
+4. Agent surface and harness guard unchanged.
+
+This brief is intentionally not an implementer spec. The designer decomposes it. If the DAG cannot be built from the ADR without inventing a router or removing the poll, say so and stop — do not ship a different design.
