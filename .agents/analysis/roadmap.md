@@ -177,11 +177,57 @@ out-of-scope, [0022](../decisions/0022-v5-scope-governance.md) § deferred):
 
 ## Next action
 
-v5, v6, and v7 have all landed (`main` @ #124: the crank is retired, both bookends seated, the
-local intake channel open). v7.1 is **designed and unbuilt** (#126). The **v8** candidate has a
-Proposed scope ADR ([0028](../decisions/0028-v8-scope-the-agent-operator-seat.md)) whose authority
-split awaits owner sign-off.
+**Updated 2026-09-03.** `main` @ #153. v5, v6, v7 and **v7.1** have all landed; **v8** (the agent
+operator seat, [0028](../decisions/0028-v8-scope-the-agent-operator-seat.md)) has shipped steps 0–3
+and its ADR is Accepted. The crank is retired, both bookends are seated, the intake channel is
+open, the service wakes on a notification, and an external agent has operated the seat through two
+full deliveries — the second decomposing a *problem* brief into a four-node DAG and merging four PRs
+in seventy-one minutes with no human between the request and the merges.
 
-Immediate: **step 0 above** — stand up delegated monitoring, deciding first whether it is *bounded*
-(build the read-only role) or *trusted* (an oversight token plus discipline). Then step 1's
-precondition fixes, which are worth doing whoever ends up operating.
+### Open, specified, and small
+
+- **Per-transition usage attribution.** `api.record_usage` is reported once per *sweep*, and a
+  sweep is not a task — one measured run had a single agent make eleven transitions across two
+  tasks and five capabilities under one token report. The whole sweep is anchored to one
+  `(task, capability)` and every other capability it exercised reads `unknown`, which
+  [track-record.md](../design/track-record.md) D3 promises means *not measured*. **This is a hard
+  prerequisite for cost-aware routing below** — that layer cannot pick a family on numbers at this
+  granularity. Highest-value open item.
+- **The v7.1 precision report-line** — the one part of [v7.1](../plans/v7.1-plan.md) designated
+  swarm-built that never ran. Spec'd; substrate-free; the next obvious hands-off brief.
+- **A non-`make` service lifecycle** — in [0028](../decisions/0028-v8-scope-the-agent-operator-seat.md)'s
+  scope, unbuilt. The seat can read the service's state and stop it, and cannot start it, so every
+  delivery that changes the running process ends in a human hand-off. Measured, not theoretical:
+  push-wake merged and the live supervisor kept running the version it predates.
+- **[0028](../decisions/0028-v8-scope-the-agent-operator-seat.md) success gate 5 is undecided.** The
+  ADR claims a rejected or failed operator action credits the operator's track record and can strike
+  it; strikes fire only on `transition`/reject events, so a ledger row of `outcome: refused` does
+  neither. Amending the ADR (the ledger outcome was deliberately a record, not a penalty — the M22
+  "qualitative never auto-penalizes" line) is the recommended resolution. Owner's call, unmade.
+
+### The next version — the human seat, not the next repo
+
+The candidate ahead of everything in *v8+ gestures* below: **equip the seat this project has spent
+five versions defining by prohibition.** v5 drew a human boundary, v6 named the bookend roles, v8
+handed an agent everything on the other side of it — and every capability that stays human by
+design is the capability with the worst instrument. Permanently banning a family, lifting that ban,
+and raising a qualitative audit flag are all hand-minted `oversight` tokens against raw PostgREST.
+The one place where a human decision is *structurally required* is the one place with no interface.
+Related: four daemons the human starts by hand, all foreground; a report that is now ten text blocks
+and grows with every milestone; and no view of anything but *now*, even though the track record has
+accumulated across restarts since #148.
+
+**"Web" is the obvious shape and it forks on the perimeter, so decide that first** — the
+[0025](../decisions/0025-v7-security-posture-local-service.md) lesson, applied to itself. A
+loopback-only UI stays inside the perimeter that ADR already draws and needs no revision. Anything
+reachable off-host triggers 0025's written widening contract in full (TLS, a rotatable credential
+scheme, per-caller identity and authZ, rate limiting, an egress re-review). That is a scope ADR up
+front, not a retrofit.
+
+**Deliberately after it:** pointing a lane at a repository this system did not write. Every
+delivery AINARRES has ever made has been to itself, which means every worker has always had ambient
+context nobody decided to give it — the designs, the ADRs, the conventions, all in the same
+repository as the task. That is a habit, not a design, and it is therefore holding up assumptions
+that are currently invisible. It is the most informative next experiment and it wants a human
+console to watch it through, which is why it comes second.
+

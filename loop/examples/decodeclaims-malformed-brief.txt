@@ -1,0 +1,31 @@
+Make decodeClaims fail loudly on a malformed bearer token instead of throwing a cryptic TypeError.
+
+decodeClaims (bin/ainarres.mjs) currently does token.split(".") and Buffer.from(payloadB64, "base64url") with no guard. A token with fewer than 3 segments, or a non-string, throws TypeError from Buffer/JSON — useless to an operator who mistyped --token.
+
+This is ONE task. No DB migration. Substrate-free validate.
+
+WHAT EXISTS TODAY (do not change the happy path):
+- export function decodeClaims(token) in bin/ainarres.mjs
+- test/whoami.test.ts has one happy-path test
+
+THE FEATURE:
+1. decodeClaims MUST throw an Error whose message includes "malformed token" when:
+   - token is not a string
+   - token.split(".").length < 3
+   - the payload segment is empty
+   - JSON.parse of the decoded payload fails
+2. The existing happy-path behaviour is unchanged (same return shape).
+3. Extend test/whoami.test.ts (do NOT replace the existing test) with cases that FAIL on current main and PASS after:
+   - decodeClaims("not-a-jwt") throws / message includes "malformed token"
+   - decodeClaims("a.b") throws (only two segments)
+   - decodeClaims(null) throws
+   - a payload that is not JSON (e.g. header.notjson.sig) throws with "malformed token"
+   - the existing happy-path test still passes
+
+VALIDATE (verbatim; must fail on main, pass after):
+    npx vitest run test/whoami.test.ts
+
+CONSTRAINTS:
+- JavaScript only (bin/ainarres.mjs ESM); tests in test/whoami.test.ts
+- Do not touch db/, Makefile, loop/, or any other CLI command
+- Do not verify signatures — still local-only decode
