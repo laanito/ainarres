@@ -207,6 +207,13 @@ in seventy-one minutes with no human between the request and the merges.
 
 ### The next version — the human seat, not the next repo
 
+**Now scoped: [ADR 0029](../decisions/0029-v9-scope-the-customers-seat.md) (Proposed).** It reframes the
+human as the *customer*, moves capability grants from lane to **project** (staffing, not queueing),
+makes the **epic** the deliverable M22 deferred, adds the customer's **veto** (human-only, no role
+impact, triggers the revert), splits the human's **two interfaces** along the EXECUTE grants that
+already enforce the line, adds the missing **instruction trail**, and folds in the per-transition
+**attribution fix**. Owner sign-off is on D1 — the first amendment to ADR 0007 since M2.
+
 The candidate ahead of everything in *v8+ gestures* below: **equip the seat this project has spent
 five versions defining by prohibition.** v5 drew a human boundary, v6 named the bookend roles, v8
 handed an agent everything on the other side of it — and every capability that stays human by
