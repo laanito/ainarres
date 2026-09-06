@@ -397,6 +397,6 @@ and less clean.
   one, by the company, on the customer's word.
 - **The spend signal becomes trustworthy**, which unblocks cost-aware routing as a *future* decision
   rather than a blocked one.
-- `design/customer-seat.md` settles the mechanics: the epic lifecycle and cancellation semantics, the
+- [`design/customer-seat.md`](../design/customer-seat.md) settles the mechanics: the epic lifecycle and cancellation semantics, the
   verdict record's shape, the console's decision-inbox layout, the instruction record, and the
   per-transition usage protocol.
