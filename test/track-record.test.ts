@@ -14,11 +14,17 @@ import { mintToken } from "./helpers/mint";
 //   * token spend sits BESIDE competence (D3) and is NULL — unknown, not 0 — for a
 //     family that emitted no usage event (unknown ≠ free).
 
-const IMPL = "m20b-impl";
-const REV = "m20b-rev";
+// Unique per run: the view aggregates ALL matching history, and a lane shared across runs
+// hands a re-run the previous run's unfinished task — so a second run against the same
+// substrate claimed the wrong task and failed. The workflow is shared on purpose (its
+// definition is idempotent); only the families and the lane carry history.
+const RUN = randomUUID().slice(0, 8);
+const IMPL = `m20b-impl-${RUN}`;
+const REV = `m20b-rev-${RUN}`;
+const LANE = `m20b-${RUN}`;
 
 const FIXTURE = `
-  insert into app.features (kind,key) values ('lane','m20b'),('role','implementer'),('role','reviewer')
+  insert into app.features (kind,key) values ('lane','${LANE}'),('role','implementer'),('role','reviewer')
   on conflict (kind,key) do nothing;
   insert into app.agent_families (key) values ('${IMPL}'),('${REV}') on conflict (key) do nothing;
   insert into app.workflows (key, description) values ('m20b-wf','M20 track-record flow')
@@ -39,14 +45,14 @@ const FIXTURE = `
   join app.stages st on st.workflow_id=w.id and st.key='implementing'
   where w.key='m20b-wf' and not exists (select 1 from app.transitions x where x.from_stage=sf.id and x.to_stage=st.id and x.kind='reject');
   insert into app.lanes (project_id, key, workflow_id)
-  select p.id, 'm20b', w.id from app.projects p join app.workflows w on w.key='m20b-wf'
+  select p.id, '${LANE}', w.id from app.projects p join app.workflows w on w.key='m20b-wf'
   where p.slug='ainarres' on conflict (project_id,key) do nothing;
 `;
 
 const json = (r: Response) => r.json() as Promise<any>;
 const oversight = () => mintToken(IMPL, "oversight", { features: [] });
-const impl = (sub: string) => mintToken(IMPL, "agent", { sub, features: ["lane:m20b", "role:implementer"] });
-const rev = (sub: string) => mintToken(REV, "agent", { sub, features: ["lane:m20b", "role:reviewer"] });
+const impl = (sub: string) => mintToken(IMPL, "agent", { sub, features: [`lane:${LANE}`, "role:implementer"] });
+const rev = (sub: string) => mintToken(REV, "agent", { sub, features: [`lane:${LANE}`, "role:reviewer"] });
 
 async function ok(p: Promise<Response>) {
   const r = await json(await p);
@@ -67,18 +73,18 @@ describe("api.family_track_record", () => {
     const rSub = randomUUID();
 
     // Implementer creates (starter role) and delivers impl→review (delivery #1).
-    const created = await ok(rpc("create_task", { token: impl(iSub), body: { lane_key: "m20b" } }));
+    const created = await ok(rpc("create_task", { token: impl(iSub), body: { lane_key: LANE } }));
     const id = created.task.id;
-    await ok(rpc("claim_next_task", { token: impl(iSub), body: { lane_key: "m20b" } }));
+    await ok(rpc("claim_next_task", { token: impl(iSub), body: { lane_key: LANE } }));
     await ok(rpc("advance_task", { token: impl(iSub), body: { task_id: id, to_stage: "reviewing" } }));
 
     // Reviewer (a DIFFERENT family) rejects review→impl — credited to the PRODUCER
     // (the implementer who advanced into review), cross-family.
-    await ok(rpc("claim_next_task", { token: rev(rSub), body: { lane_key: "m20b" } }));
+    await ok(rpc("claim_next_task", { token: rev(rSub), body: { lane_key: LANE } }));
     await ok(rpc("reject_task", { token: rev(rSub), body: { task_id: id, to_stage: "implementing", reason: "not yet" } }));
 
     // Implementer re-delivers impl→review (delivery #2).
-    await ok(rpc("claim_next_task", { token: impl(iSub), body: { lane_key: "m20b" } }));
+    await ok(rpc("claim_next_task", { token: impl(iSub), body: { lane_key: LANE } }));
     await ok(rpc("advance_task", { token: impl(iSub), body: { task_id: id, to_stage: "reviewing" } }));
 
     // Record the implementer's token spend for this task (claude-shaped; oversight).
@@ -88,7 +94,7 @@ describe("api.family_track_record", () => {
     }));
 
     // Reviewer accepts review→done (delivery for the reviewer role).
-    await ok(rpc("claim_next_task", { token: rev(rSub), body: { lane_key: "m20b" } }));
+    await ok(rpc("claim_next_task", { token: rev(rSub), body: { lane_key: LANE } }));
     await ok(rpc("advance_task", { token: rev(rSub), body: { task_id: id, to_stage: "done" } }));
 
     // Read the view (oversight-only) for just our two families.

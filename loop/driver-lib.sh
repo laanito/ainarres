@@ -158,14 +158,20 @@ release_stranded() {
 # M20 (design/track-record.md D1): record a finished sweep's TOKEN spend. Best-effort —
 # NEVER fails the run. Writes nothing (noting the miss on stderr → usage.log) when the
 # harness emits no parseable token counts or the sweep did no work — an unmeasured family
-# reads as "unknown", never "free". $1=poller/tier (→ family), $2=worker sub, $3=sweep log.
+# reads as "unknown", never "free". $1=poller/tier (→ family), $2=worker sub, $3=sweep log,
+# $4=byte offset where THIS sweep's output starts (tier logs are appended across sweeps).
+# v9 (design/customer-seat.md D7): a streamed log is split per transition by the CLI.
 record_usage() {
-  local poller="$1" sub="$2" logf="$3"
+  local poller="$1" sub="$2" logf="$3" off="${4:-0}"
   [ -n "$sub" ] && [ -f "$logf" ] || return 0
   ai record-usage --actor "$sub" --family "$(role_family "$poller")" \
-     --from-log "$logf" --sweep "$sub" --token "$OVERSIGHT_TOKEN" \
+     --from-log "$logf" --from-offset "$off" --sweep "$sub" --token "$OVERSIGHT_TOKEN" \
      >/dev/null 2>>"$RUN_DIR/usage.log" || true
 }
+
+# Byte size of a log (0 if absent) — taken BEFORE a sweep appends, so record_usage reads
+# only that sweep's output and never re-charges an earlier sweep's.
+log_offset() { [ -f "$1" ] && wc -c < "$1" | tr -d ' ' || echo 0; }
 
 # A pool member that claimed nothing leaves a log holding only its worktree line — by v8,
 # 189 per-sweep files had piled up in loop/run/, 125 of them under 100 bytes, which makes
@@ -189,14 +195,15 @@ prune_noop_log() {
 # "nothing claimable", then exits). The token uses a KNOWN sub so we can release a claim
 # the sweep stranded. $1 = tier, $2 = optional brief (the one-shot designer decompose).
 run_sweep() {
-  local tier="$1" brief="${2:-}" rc=0 sub tok
+  local tier="$1" brief="${2:-}" rc=0 sub tok off
   sub="$(uuidgen | tr 'A-Z' 'a-z')"
   tok="$(mint_token "$tier" "$sub")"
+  off="$(log_offset "$RUN_DIR/$tier.log")"
   AINARRES_TOKEN="$tok" LOOP_SWEEP_ID="$sub" harness_sweep "$tier" "$brief" >>"$RUN_DIR/$tier.log" 2>&1 &
   CURRENT_SWEEP_PID=$!
   wait "$CURRENT_SWEEP_PID" || rc=$?
   CURRENT_SWEEP_PID=""
-  record_usage "$tier" "$sub" "$RUN_DIR/$tier.log"
+  record_usage "$tier" "$sub" "$RUN_DIR/$tier.log" "$off"
   release_stranded "$sub" "$tok"
   return "$rc"
 }
@@ -229,17 +236,18 @@ run_pool() {
 # ROLE is federated — whoever is free claims the next reviewing task (SKIP LOCKED
 # distributes). Only grok holds capability:integrate, so integration stays single.
 run_concurrent() {
-  local pollers=("$@") i name sub tok pids=() subs=() toks=() names=()
+  local pollers=("$@") i name sub tok pids=() subs=() toks=() names=() offs=()
   for name in "${pollers[@]}"; do
     sub="$(uuidgen | tr 'A-Z' 'a-z')"
     tok="$(mint_token "$name" "$sub")"
+    offs+=("$(log_offset "$RUN_DIR/$name.log")")
     AINARRES_TOKEN="$tok" LOOP_SWEEP_ID="$sub" harness_sweep "$name" >>"$RUN_DIR/$name.log" 2>&1 &
     pids+=("$!"); subs+=("$sub"); toks+=("$tok"); names+=("$name")
   done
   POOL_PIDS=("${pids[@]}")                 # expose to stop_active for the kill trap
   for i in "${!pids[@]}"; do
     wait "${pids[$i]}" || true
-    record_usage "${names[$i]}" "${subs[$i]}" "$RUN_DIR/${names[$i]}.log"
+    record_usage "${names[$i]}" "${subs[$i]}" "$RUN_DIR/${names[$i]}.log" "${offs[$i]}"
     release_stranded "${subs[$i]}" "${toks[$i]}"
   done
   POOL_PIDS=()

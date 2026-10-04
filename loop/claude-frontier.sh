@@ -175,4 +175,10 @@ esac
 # the shims. A temporary guard until the v7 service removes the make/docker substrate-cheat.
 export PATH="$REPO/loop/guard-bin:$PATH"
 
-exec "$CLAUDE" -p "$PROMPT" --model "$MODEL" $FLAGS --output-format json
+# Streamed output (v9 Slice 0, design/customer-seat.md D7): one JSON event per line, so the
+# driver's record-usage can cut the sweep's spend at each transition it made. The usage
+# that is exact per message is the `message_delta` partial event — the whole-message lines
+# carry a placeholder output count — hence --include-partial-messages (and stream-json in
+# -p mode requires --verbose).
+exec "$CLAUDE" -p "$PROMPT" --model "$MODEL" $FLAGS \
+  --output-format stream-json --verbose --include-partial-messages

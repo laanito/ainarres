@@ -449,13 +449,15 @@ pass "Phase 9 — LISTEN off: board drained via the poll, degrade visible, super
 # ── Phase 10: LEASE-EXPIRY RECLAIM (ADR 0027 criterion 3) ─────────────────────
 # The poll backstop covers the claimable transition that fires NO notification:
 # a task whose lease has lapsed (lazy reclaim, ADR 0009). The trigger ignores
-# claimed_by / lease_expires_at, so push-wake must not strand this work.
+# claimed_by / lease_expires_at, so push-wake must not strand this work. The stale holder
+# is the task's own creator: claimed_by is a foreign key to app.agents, so it must be a real
+# agent (a random uuid is refused, and this phase never ran while Phase 4a failed first).
 create_tasks 1
 P10_ID="$(first_active_id)"
 [ -n "$P10_ID" ] || fail "Phase 10: create_tasks 1 left no active task id on the board"
 loop_psql -c "
   update app.tasks
-     set claimed_by = gen_random_uuid(),
+     set claimed_by = created_by,
          lease_expires_at = now() - interval '1 hour'
    where id = '$P10_ID'::uuid;
 " >/dev/null || fail "Phase 10: could not stamp a past lease_expires_at on $P10_ID"

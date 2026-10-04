@@ -1025,6 +1025,135 @@ function parseGrokUsage(logText) {
   };
 }
 
+// v9 Slice 0 (design/customer-seat.md D7) — split ONE sweep's spend at the transitions it
+// made, so each piece can be charged to the transition that earned it. Two readers have
+// failed trying to divide a number that arrived already merged (#147 charged the first
+// transition instead of the last; both are guesses). The fix is in the writer: a STREAMED
+// harness log already carries per-turn usage, and the CLI prints each transition's event
+// into the same stream as a tool result. Walk them in order and cut.
+//
+// Per family, only two things differ: which line is a turn's usage, and whether that usage
+// arrives BEFORE the turn's tool results (claude message_delta, grok `usage`) or AFTER them
+// (opencode step_finish) — in the second case the cut waits for the step's usage line, so
+// the step that advanced is charged to the transition it made.
+//
+// Transitions are found harness-agnostically: any JSON object embedded (at any depth, in
+// any string) that is an ok CLI envelope carrying a `transition` event. Harnesses repeat
+// tool output (grok re-sends it per status update; models quote it), so an event id cuts
+// once, at its first sighting.
+//
+// Returns { segments: [{ transition, task, tokens }], model } — `transition`/`task` null
+// for a sweep that moved nothing (one unanchored segment, recorded as today). Spend after
+// the last transition (the final empty claim, the sign-off) joins the last segment: it is
+// that sweep's closing cost, and a separate unanchored row would fall back to the reader's
+// guess. Returns null when the family has no streamed shape or the log holds no per-turn
+// usage (a json-mode log, an unknown harness) — the caller falls back to parseUsage, and
+// unknown still never reads as free.
+export function segmentUsage(logText, family) {
+  const shape = streamShape(family);
+  if (!shape || typeof logText !== "string") return null;
+  const zero = () => ({ input: 0, output: 0, cache_read: 0, cache_creation: 0 });
+  const add = (a, b) => { for (const k of Object.keys(a)) a[k] += b[k] ?? 0; };
+  const segments = [], seen = new Set();
+  let cur = zero(), pending = [], model = null, anyUsage = false;
+  const cut = () => {
+    for (const ev of pending) { segments.push({ transition: ev.id, task: ev.task_id, tokens: cur }); cur = zero(); }
+    pending = [];
+  };
+  for (const line of logText.split("\n")) {
+    const t = line.trim();
+    if (!t.startsWith("{")) continue;
+    let obj;
+    try { obj = JSON.parse(t); } catch { continue; }
+    model = shape.model(obj) ?? model;
+    const u = shape.usage(obj);
+    if (u) { add(cur, u); anyUsage = true; if (shape.usageAfterTools) cut(); }
+    for (const ev of transitionEvents(obj)) {
+      if (seen.has(ev.id)) continue;
+      seen.add(ev.id);
+      pending.push(ev);
+    }
+    if (!shape.usageAfterTools) cut();
+  }
+  cut(); // a transition with no usage line after it (the harness died) still anchors
+  if (!anyUsage) return null;
+  const tail = Object.values(cur).some((n) => n > 0);
+  if (tail && segments.length) add(segments[segments.length - 1].tokens, cur);
+  else if (tail || !segments.length) segments.push({ transition: null, task: null, tokens: cur });
+  return { segments, model };
+}
+
+// The per-turn usage line of each streamed harness. Wrappers run these modes:
+// claude `--output-format stream-json --verbose --include-partial-messages` (the
+// message_delta carries the message's FINAL usage — the whole-message lines carry a
+// placeholder output count), grok `--output-format streaming-json` (input already
+// excludes cache), opencode `--format json`. cursor-agent is not here yet: its stream
+// shape is unverified, so it stays on the whole-sweep parseUsage path.
+function streamShape(family) {
+  if (!family) return null;
+  if (/^claude-code\+/.test(family)) return {
+    usageAfterTools: false,
+    usage: (o) => {
+      const u = o?.type === "stream_event" && o.event?.type === "message_delta" ? o.event.usage : null;
+      if (!u || typeof u.input_tokens !== "number") return null;
+      return { input: u.input_tokens, output: u.output_tokens ?? 0, cache_read: u.cache_read_input_tokens ?? 0, cache_creation: u.cache_creation_input_tokens ?? 0 };
+    },
+    model: (o) => (o?.type === "stream_event" && o.event?.type === "message_start" ? o.event.message?.model ?? null : null),
+  };
+  if (/^grok\+/.test(family)) return {
+    usageAfterTools: false,
+    usage: (o) => {
+      const u = o?.type === "usage" ? o.usage : null;
+      if (!u || typeof u.input_tokens !== "number") return null;
+      return { input: u.input_tokens, output: u.output_tokens ?? 0, cache_read: u.cache_read_input_tokens ?? 0, cache_creation: u.cache_creation_input_tokens ?? 0 };
+    },
+    model: (o) => (o?.type === "end" && o.modelUsage && typeof o.modelUsage === "object" ? Object.keys(o.modelUsage)[0] ?? null : null),
+  };
+  if (/^opencode\+/.test(family)) return {
+    usageAfterTools: true,
+    usage: (o) => {
+      const pt = o?.type === "step_finish" ? o.part?.tokens : null;
+      if (!pt || typeof pt !== "object") return null;
+      return { input: pt.input ?? 0, output: (pt.output ?? 0) + (pt.reasoning ?? 0), cache_read: pt.cache?.read ?? 0, cache_creation: pt.cache?.write ?? 0 };
+    },
+    model: () => null,
+  };
+  return null;
+}
+
+// Every ok CLI envelope carrying a transition event, anywhere inside a parsed log line:
+// a tool result is a string (claude content, opencode state.output) or a string inside a
+// stringified object (grok rawOutput.output_for_prompt), so strings that look like JSON
+// are parsed and walked too. Depth-bounded; never throws.
+function transitionEvents(root) {
+  const found = [];
+  const walk = (v, depth) => {
+    if (depth > 8 || v == null) return;
+    if (typeof v === "string") {
+      if (v.includes('\\"ok\\":true') && v.trimStart().startsWith("{")) {
+        try { walk(JSON.parse(v), depth + 1); } catch { /* not JSON after all */ }
+        return;
+      }
+      const s = v.indexOf('{"ok":true');
+      if (s === -1) return;
+      for (const piece of v.slice(s).split("\n")) {
+        const p = piece.trim();
+        if (!p.startsWith("{")) continue;
+        try { walk(JSON.parse(p), depth + 1); } catch { /* not a whole JSON line */ }
+      }
+      return;
+    }
+    if (typeof v !== "object") return;
+    const ev = v.ok === true ? v.event : null;
+    if (ev && ev.type === "transition" && typeof ev.id === "string" && typeof ev.task_id === "string") {
+      found.push({ id: ev.id, task_id: ev.task_id });
+    }
+    for (const x of Array.isArray(v) ? v : Object.values(v)) walk(x, depth + 1);
+  };
+  walk(root, 0);
+  return found;
+}
+
 // ── v8 step 2 (ADR 0028): the operator seat ─────────────────────────────────
 // The operator is an identity, not "whoever holds JWT_SECRET". This family is seeded
 // in db/seed.sql with lane:intake + role:intaker + lane:dev + role:designer +
@@ -1621,37 +1750,64 @@ const COMMANDS = {
   // directly (tests/direct use). When no tokens can be parsed (unknown harness shape /
   // a non-claude family today), it writes NOTHING and notes the miss on stderr — the
   // track-record view then shows that family as unknown (NULL), never as free.
+  //
+  // v9 Slice 0 (design/customer-seat.md D7): a STREAMED log is split at the transitions
+  // the sweep made (segmentUsage) and each piece is recorded against the transition that
+  // earned it — one record_usage call per transition, each naming its event as the anchor.
+  // A log with no streamed shape falls back to the whole-sweep parseUsage, unanchored.
+  // --from-offset skips bytes an earlier sweep appended to the same log.
   async "record-usage"(rest, values, token) {
     if (!values.actor) fail("record-usage: --actor is required");
-    let payload;
+    let pieces; // [{ payload, task }]
     if (values.data) {
-      payload = JSON.parse(values.data);
+      pieces = [{ payload: JSON.parse(values.data), task: values.task ?? null }];
     } else if (values["from-log"]) {
       let text;
       try {
-        text = readFileSync(values["from-log"], "utf8");
+        const offset = Math.max(0, Number.parseInt(values["from-offset"] ?? "0", 10) || 0);
+        text = readFileSync(values["from-log"]).subarray(offset).toString("utf8");
       } catch (e) {
         process.stderr.write(`record-usage: cannot read log ${values["from-log"]} (${e.message}) — recorded nothing\n`);
         return;
       }
-      const parsed = parseUsage(text, values.family);
-      if (!parsed) {
-        process.stderr.write(`record-usage: no parseable token counts for family '${values.family ?? "?"}' in ${values["from-log"]} — recorded nothing (family reads as unknown, not free)\n`);
-        return;
+      const seg = segmentUsage(text, values.family);
+      if (seg) {
+        pieces = seg.segments.map((s) => ({
+          payload: { tokens: s.tokens, model: seg.model, ...(s.transition ? { transition: s.transition } : {}) },
+          task: s.task ?? values.task ?? null,
+        }));
+      } else {
+        const parsed = parseUsage(text, values.family);
+        if (!parsed) {
+          process.stderr.write(`record-usage: no parseable token counts for family '${values.family ?? "?"}' in ${values["from-log"]} — recorded nothing (family reads as unknown, not free)\n`);
+          return;
+        }
+        pieces = [{ payload: { tokens: parsed.tokens, model: parsed.model }, task: values.task ?? null }];
       }
-      payload = { tokens: parsed.tokens, model: parsed.model };
     } else {
       fail("record-usage: need --from-log PATH (with --family) or --data JSON");
     }
-    if (values.sweep) payload.sweep_id = values.sweep;
-    const body = { actor: values.actor, data: payload };
-    if (values.task) body.task = values.task;
-    // v8: the family travels to the substrate now, not just to parseUsage. A sweep that
-    // claimed nothing has no task to charge and often no agent row either, so the family
-    // is the only attribution left — and that spend is real (three empty sweeps cost
-    // ~474k tokens in one measured run). Without it the verb can only drop the number.
-    if (values.family) body.family = values.family;
-    return callVerb("record_usage", body, token);
+    const bodies = pieces.map(({ payload, task }) => {
+      if (values.sweep) payload.sweep_id = values.sweep;
+      const body = { actor: values.actor, data: payload };
+      if (task) body.task = task;
+      // v8: the family travels to the substrate now, not just to parseUsage. A sweep that
+      // claimed nothing has no task to charge and often no agent row either, so the family
+      // is the only attribution left — and that spend is real (three empty sweeps cost
+      // ~474k tokens in one measured run). Without it the verb can only drop the number.
+      if (values.family) body.family = values.family;
+      return body;
+    });
+    if (bodies.length === 1) return callVerb("record_usage", bodies[0], token);
+    // Several transitions: record each, then report them as one envelope. A refused piece
+    // does not stop the rest — partial spend recorded beats none.
+    const results = [];
+    for (const body of bodies) {
+      const r = await rpc("record_usage", body, token);
+      results.push(r.body ?? { ok: false, code: "http_error", status: r.status });
+    }
+    const ok = results.every((r) => r && r.ok);
+    emit({ ok, code: ok ? "ok" : "partial", recorded: results.filter((r) => r && r.ok).length, results }, ok);
   },
 };
 
@@ -1683,7 +1839,7 @@ const OPTS = {
   report: { lane: { type: "string" }, limit: { type: "string" }, json: { type: "boolean" }, token: { type: "string" } },
   intake: { request: { type: "string" }, file: { type: "string" }, subject: { type: "string" }, url: { type: "string" }, port: { type: "string" }, psk: { type: "string" }, "psk-file": { type: "string" }, json: { type: "boolean" } },
   refine: { brief: { type: "string" }, note: { type: "string" }, lane: { type: "string" }, to: { type: "string" }, family: { type: "string" }, tries: { type: "string" }, ttl: { type: "string" }, json: { type: "boolean" }, token: { type: "string" } },
-  "record-usage": { actor: { type: "string" }, family: { type: "string" }, "from-log": { type: "string" }, data: { type: "string" }, sweep: { type: "string" }, task: { type: "string" }, token: { type: "string" } },
+  "record-usage": { actor: { type: "string" }, family: { type: "string" }, "from-log": { type: "string" }, "from-offset": { type: "string" }, data: { type: "string" }, sweep: { type: "string" }, task: { type: "string" }, token: { type: "string" } },
 };
 
 const USAGE = `ainarres — agent CLI (verbs over PostgREST)
@@ -1718,7 +1874,7 @@ const USAGE = `ainarres — agent CLI (verbs over PostgREST)
   service-status  [--file PATH] [--json]   v7 standing-service liveness readout (reads loop/run/service.status; no token/network)
   events  [--lane L] [--task UUID] [--family F] [--type X] [--limit N] [--json]   event timeline joined to the acting family
   report  [--lane L] [--limit N]   end-of-run report: shipped (PRs) · failed · escalations · activity by family
-  record-usage  --actor SUB (--from-log PATH --family F | --data JSON) [--sweep ID] [--task UUID]   stamp a sweep's token spend (driver/oversight; tokens only, no USD)
+  record-usage  --actor SUB (--from-log PATH [--from-offset BYTES] --family F | --data JSON) [--sweep ID] [--task UUID]   stamp a sweep's token spend, one row per transition when the log streams (driver/oversight; tokens only, no USD)
 
 env: AINARRES_BASE_URL, JWT_SECRET (token), AINARRES_TOKEN (bearer; --token overrides)`;
 

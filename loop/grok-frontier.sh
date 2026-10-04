@@ -98,15 +98,8 @@ fi
 # shims. A temporary guard until the v7 service removes the make/docker substrate-cheat.
 export PATH="$REPO/loop/guard-bin:$PATH"
 
-# Token usage: grok prints usage ONLY to --debug-file (never stdout, even with -p), so
-# pass one and bridge its `_meta` usage line(s) into stdout — the sweep log the driver
-# captures and record_usage/parseUsage reads. `_meta` is single-line
-# (inputTokens…outputTokens…totalTokens…cachedReadTokens…reasoningTokens), so a grep pulls
-# it without dumping the (large) debug file. Not exec'd, so the bridge runs after grok; the
-# `|| rc=$?` preserves grok's exit code under `set -e`.
-GROK_DEBUG="${RUN_DIR:-$REPO/loop/run}/grok-debug-$$.log"
-rc=0
-"$GROK" -p "$PROMPT" --model "$MODEL" --always-approve --output-format json --debug-file "$GROK_DEBUG" || rc=$?
-grep -a 'inputTokens' "$GROK_DEBUG" 2>/dev/null || true
-rm -f "$GROK_DEBUG" 2>/dev/null || true
-exit "$rc"
+# Streamed output (v9 Slice 0, design/customer-seat.md D7): `streaming-json` puts a `usage`
+# line per model turn on stdout, ahead of that turn's tool results, so the driver's
+# record-usage can cut the sweep's spend at each transition it made. This replaces the
+# old --debug-file `_meta` bridge, which only ever carried the sweep's single total.
+exec "$GROK" -p "$PROMPT" --model "$MODEL" --always-approve --output-format streaming-json
