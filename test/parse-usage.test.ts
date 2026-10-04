@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseUsage } from "../bin/ainarres.mjs";
+import { parseUsage, segmentUsage } from "../bin/ainarres.mjs";
 
 // M20 Slice A (design/track-record.md D1/D3). The driver-side per-family token parser
 // — pure, no I/O. The load-bearing property: an UNKNOWN harness shape returns null,
@@ -279,5 +279,93 @@ describe("parseUsage — the per-family token parser", () => {
   it("returns null for a cursor-shaped log with grok family (no _meta)", () => {
     // cursor has top-level usage with inputTokens but no _meta — must not be recognized
     expect(parseUsage(cursorLog, "grok+grok-build")).toBeNull();
+  });
+});
+
+// v9 Slice 0 (design/customer-seat.md D7) — the writer cuts a STREAMED sweep log at each
+// transition the sweep made. Pure; the CLI records one anchored usage row per segment.
+describe("segmentUsage — one sweep's spend, cut per transition", () => {
+  // The CLI envelope an `advance` prints; the transition event is what anchors a segment.
+  const env = (id: string, task = "task-1") => ({ ok: true, code: "ok", task: { id: task }, event: { id, task_id: task, type: "transition", data: { kind: "advance" } } });
+  const lines = (...xs: object[]) => xs.map((x) => JSON.stringify(x)).join("\n");
+
+  // claude `stream-json --include-partial-messages`: the per-message usage that is final is
+  // the message_delta; the whole-message `assistant` lines carry a PLACEHOLDER output count
+  // (measured: 5 vs 463 for the same run) and must not be summed.
+  const delta = (input: number, output: number, cr = 0, cc = 0) => ({ type: "stream_event", event: { type: "message_delta", usage: { input_tokens: input, output_tokens: output, cache_read_input_tokens: cr, cache_creation_input_tokens: cc } } });
+  const placeholder = { type: "assistant", message: { id: "m", usage: { input_tokens: 999, output_tokens: 5 } } };
+  const toolResult = (e: object) => ({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t", content: JSON.stringify(e) }] } });
+
+  it("claude: charges each turn to the transition its tool call made, sign-off joins the last", () => {
+    const log = lines(
+      { type: "stream_event", event: { type: "message_start", message: { model: "claude-sonnet-5" } } },
+      placeholder, delta(10, 100, 1000, 50), toolResult(env("ev-merge")),
+      placeholder, delta(8, 40, 2000, 0), toolResult(env("ev-green")),
+      delta(8, 7, 2100, 0), // "nothing claimable" → stop
+      { type: "result", usage: { input_tokens: 26, output_tokens: 147 } },
+    );
+    expect(segmentUsage(log, "claude-code+sonnet")).toEqual({
+      model: "claude-sonnet-5",
+      segments: [
+        { transition: "ev-merge", task: "task-1", tokens: { input: 10, output: 100, cache_read: 1000, cache_creation: 50 } },
+        { transition: "ev-green", task: "task-1", tokens: { input: 16, output: 47, cache_read: 4100, cache_creation: 0 } },
+      ],
+    });
+  });
+
+  it("opencode: step_finish comes AFTER the step's tool output, so the cut waits for it", () => {
+    const step = (input: number) => ({ type: "step_finish", part: { tokens: { input, output: 1, reasoning: 1, cache: { read: 0, write: 0 } } } });
+    const tool = (e: object) => ({ type: "tool_use", part: { tool: "bash", state: { status: "completed", output: JSON.stringify(e) } } });
+    const log = lines(step(100), tool(env("ev-1")), step(20), step(3));
+    const seg = segmentUsage(log, "opencode+big-pickle");
+    // The advancing step (20) belongs to ev-1, not to whatever comes next.
+    expect(seg!.segments).toEqual([
+      { transition: "ev-1", task: "task-1", tokens: { input: 123, output: 6, cache_read: 0, cache_creation: 0 } },
+    ]);
+  });
+
+  it("grok: a tool result re-sent per status update, and quoted later by the model, cuts ONCE", () => {
+    const usage = (input: number) => ({ type: "usage", usage: { input_tokens: input, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } });
+    const upd = (e: object) => ({ type: "tool_call_update", rawOutput: JSON.stringify({ type: "Bash", output_for_prompt: `exit: 0\n${JSON.stringify(e)}\n` }) });
+    const log = lines(usage(50), upd(env("ev-a")), upd(env("ev-a")), usage(5), { type: "text", data: JSON.stringify(env("ev-a")) }, usage(1));
+    const seg = segmentUsage(log, "grok+grok-4.7");
+    expect(seg!.segments).toHaveLength(1);
+    expect(seg!.segments[0]).toMatchObject({ transition: "ev-a", tokens: { input: 56, output: 3 } });
+  });
+
+  it("splits across tasks: each segment carries its own transition's task", () => {
+    const usage = (input: number) => ({ type: "usage", usage: { input_tokens: input, output_tokens: 0 } });
+    const upd = (e: object) => ({ type: "tool_call_update", rawOutput: JSON.stringify({ output_for_prompt: JSON.stringify(e) }) });
+    const seg = segmentUsage(lines(usage(1), upd(env("e1", "A")), usage(2), upd(env("e2", "B"))), "grok+x");
+    expect(seg!.segments.map((s: any) => [s.transition, s.task, s.tokens.input])).toEqual([["e1", "A", 1], ["e2", "B", 2]]);
+  });
+
+  it("a sweep that moved nothing is ONE unanchored segment — the empty-sweep path is unchanged", () => {
+    const claim = { ok: true, code: "empty", task: null, event: null };
+    const seg = segmentUsage(lines(delta(9, 3), toolResult(claim)), "claude-code+sonnet");
+    expect(seg!.segments).toEqual([{ transition: null, task: null, tokens: { input: 9, output: 3, cache_read: 0, cache_creation: 0 } }]);
+  });
+
+  it("ignores ok envelopes that are not transitions, and failed advances", () => {
+    const claimed = { ok: true, code: "ok", task: { id: "t" }, event: { id: "c1", task_id: "t", type: "claim" } };
+    const refused = { ok: false, code: "forbidden", event: { id: "x", task_id: "t", type: "transition" } };
+    const seg = segmentUsage(lines(delta(4, 1), toolResult(claimed), toolResult(refused)), "claude-code+sonnet");
+    expect(seg!.segments).toHaveLength(1);
+    expect(seg!.segments[0].transition).toBeNull();
+  });
+
+  it("returns null — never zeroes — when the log has no per-turn usage, so the caller falls back", () => {
+    expect(segmentUsage(claudeResult, "claude-code+sonnet")).toBeNull(); // json-mode log
+    expect(segmentUsage(lines(toolResult(env("e"))), "grok+x")).toBeNull();
+    expect(segmentUsage("not json\n{oops", "opencode+x")).toBeNull();
+    expect(segmentUsage(lines(delta(1, 1)), "cursor-agent+composer-2.5")).toBeNull(); // unverified shape
+    expect(segmentUsage(lines(delta(1, 1)), undefined as any)).toBeNull();
+  });
+
+  it("conserves the total: the segments sum to the sweep's usage", () => {
+    const log = lines(delta(3, 30, 300, 3), toolResult(env("a")), delta(4, 40, 400, 4), toolResult(env("b")), delta(5, 50, 500, 5));
+    const seg = segmentUsage(log, "claude-code+opus")!;
+    const sum = seg.segments.reduce((n: number, s: any) => n + s.tokens.input + s.tokens.output + s.tokens.cache_read + s.tokens.cache_creation, 0);
+    expect(sum).toBe(3 + 30 + 300 + 3 + 4 + 40 + 400 + 4 + 5 + 50 + 500 + 5);
   });
 });

@@ -83,7 +83,11 @@ wake_listener_start() {
   # open succeeds immediately, and the supervisor is itself a writer so the fd never hits
   # EOF. Opening read-only would BLOCK until a writer appeared — the hang this fd trick
   # exists to avoid.
-  if ! exec 9<>"$WAKE_FIFO" 2>/dev/null; then
+  # The brace group scopes the 2>/dev/null to this one open. A redirect-only `exec` makes
+  # EVERY redirection on it permanent, so the bare `exec 9<>… 2>/dev/null` this used to be
+  # silenced the supervisor's stderr for the rest of its life — every ⚠ the service wrote
+  # after the listener started (holds, stalls, demand it cannot serve) went to /dev/null.
+  if ! { exec 9<>"$WAKE_FIFO"; } 2>/dev/null; then
     echo "push-wake DEGRADE: cannot open $WAKE_FIFO — interval poll only"
     rm -f "$WAKE_FIFO" 2>/dev/null || true
     WAKE_ACTIVE=0
@@ -112,7 +116,7 @@ wake_listener_stop() {
     kill "$WAKE_LISTENER_PID" 2>/dev/null || true
     WAKE_LISTENER_PID=""
   fi
-  exec 9<&- 2>/dev/null || true
+  { exec 9<&-; } 2>/dev/null || true   # scoped, as at the open
   rm -f "$WAKE_FIFO" 2>/dev/null || true
   WAKE_ACTIVE=0
   return 0

@@ -221,6 +221,31 @@ The substrate change is close to nil. The change is in the harness wrappers and 
 which is why this is the third attempt and the first cheap one: the previous two were fixing the
 reader because that is where the symptom was.
 
+**Amended at build (Slice 0).** The premise that wrappers "already parse cumulative usage" was
+wrong for three of four harnesses: claude, grok and cursor ran in single-result JSON mode and
+reported one total at exit. Only opencode streamed. And `record_usage` is oversight-only, so a
+wrapper holding an agent token cannot call it mid-sweep anyway. As built:
+
+- **The wrappers stream.** claude runs `stream-json --verbose --include-partial-messages`. Its
+  `message_delta` carries each message's final usage; the whole-message lines carry a
+  placeholder output count (measured: 5 vs 463). grok runs `streaming-json`, which emits one
+  `usage` line per turn and retires the `--debug-file` bridge. opencode is unchanged.
+- **The cut happens after the sweep, in the CLI, with an explicit anchor.** `segmentUsage` walks
+  the log in order. Each `advance` prints its transition event into the stream as a tool result,
+  so the parser cuts there, deduped by event id. opencode's `step_finish` arrives *after* a
+  step's tool output, so for opencode the cut waits for it. Each piece is recorded with
+  `data.transition` = the event id, and `record_usage` refuses an anchor that is not a
+  transition this actor made (`bad_anchor`). Spend after the last transition joins the last
+  piece. A sweep with no transition stays one unanchored report, so the empty-sweep ledger is
+  untouched. The driver passes `--from-offset` because tier logs are appended across sweeps.
+- **#147's window is kept, not deleted, for unanchored events only.** Two writers still produce
+  them: all pre-v9 history (re-reading it with a cruder rule would un-fix the Hermes run), and
+  cursor-agent, whose stream shape could not be probed (not signed in at build time). An anchored
+  event is charged exactly. Deleting the window waits for cursor to stream and for the history to
+  stop mattering.
+- **Durability holds:** a harness that dies mid-sweep leaves its streamed turns in the log, so
+  spend up to the last turn is still recorded.
+
 ## The seat, concretely
 
 ```
