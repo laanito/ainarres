@@ -18,6 +18,9 @@ import { mintToken } from "./helpers/mint";
 
 const FAM = "v8-demand";
 const SUFFIX = randomUUID().slice(0, 8);
+// v9 Slice A (design/customer-seat.md D1): a bundle names the PROJECT a worker must be staffed
+// on, not the lane. The fixture lane lives in project `ainarres`.
+const PROJECT = "project:ainarres";
 const LANE = `v8-demand-${SUFFIX}`;
 const WF = `${LANE}-wf`;
 const ROLE_A = `role:v8a-${SUFFIX}`;   // moves `open` → `mid`
@@ -126,9 +129,9 @@ beforeAll(async () => {
 });
 
 describe("api.demand — pending work in capability terms", () => {
-  it("reports the bundle a waiting task needs: lane + the transition's role", () => {
+  it("reports the bundle a waiting task needs: project + the transition's role", () => {
     plant();
-    const row = bundleFor(`lane:${LANE}`, ROLE_A);
+    const row = bundleFor(PROJECT, ROLE_A);
     expect(row, JSON.stringify(demand())).toBeTruthy();
     expect(row!.pending).toBe(1);
     expect(row!.lane).toBe(LANE);
@@ -137,26 +140,26 @@ describe("api.demand — pending work in capability terms", () => {
   it("counts tasks needing the SAME bundle together", () => {
     plant();
     plant();
-    expect(bundleFor(`lane:${LANE}`, ROLE_A)!.pending).toBe(3); // the one above + these two
+    expect(bundleFor(PROJECT, ROLE_A)!.pending).toBe(3); // the one above + these two
   });
 
   it("includes the task's own required_features in the bundle (M12 escalation carries them)", () => {
     plant({ required: [EXTRA] });
-    const row = bundleFor(`lane:${LANE}`, ROLE_A, EXTRA);
+    const row = bundleFor(PROJECT, ROLE_A, EXTRA);
     expect(row).toBeTruthy();
     expect(row!.pending).toBe(1);
     // …and it does NOT inflate the plain bundle's count.
-    expect(bundleFor(`lane:${LANE}`, ROLE_A)!.pending).toBe(3);
+    expect(bundleFor(PROJECT, ROLE_A)!.pending).toBe(3);
   });
 
   it("lists EVERY way out of a stage — one row per outgoing transition, task counted once each", () => {
     plant({ stage: "mid" });
-    expect(bundleFor(`lane:${LANE}`, ROLE_B)!.pending).toBe(1); // the advance path
-    expect(bundleFor(`lane:${LANE}`, ROLE_R)!.pending).toBe(1); // the reject path
+    expect(bundleFor(PROJECT, ROLE_B)!.pending).toBe(1); // the advance path
+    expect(bundleFor(PROJECT, ROLE_R)!.pending).toBe(1); // the reject path
   });
 
   it("omits what claim_next_task would skip: blocked, live lease, terminal, unmet dependency", () => {
-    const before = bundleFor(`lane:${LANE}`, ROLE_A)!.pending;
+    const before = bundleFor(PROJECT, ROLE_A)!.pending;
 
     plant({ blocked: true });
     plant({ leaseMins: 30 });                       // held, lease still live
@@ -164,13 +167,13 @@ describe("api.demand — pending work in capability terms", () => {
     const blocker = plant();                        // …itself pending, so it counts
     plant({ dependsOn: [blocker] });                // dependency not terminal ⇒ not yet claimable
 
-    expect(bundleFor(`lane:${LANE}`, ROLE_A)!.pending).toBe(before + 1); // only the blocker
+    expect(bundleFor(PROJECT, ROLE_A)!.pending).toBe(before + 1); // only the blocker
   });
 
   it("counts a task again once its lease has LAPSED (lazy reclaim makes it pending, ADR 0009)", () => {
-    const before = bundleFor(`lane:${LANE}`, ROLE_A)!.pending;
+    const before = bundleFor(PROJECT, ROLE_A)!.pending;
     plant({ leaseMins: -5 });                       // claimed, but the lease expired
-    expect(bundleFor(`lane:${LANE}`, ROLE_A)!.pending).toBe(before + 1);
+    expect(bundleFor(PROJECT, ROLE_A)!.pending).toBe(before + 1);
   });
 
   it("names no task, worker, tier or service — capability terms only (the ADR 0026 line)", () => {

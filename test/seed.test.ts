@@ -41,7 +41,7 @@ describe("seed fixture", () => {
     expect(c.lanes).toBe(1);
     expect(c.transitions).toBe(4); // 3 advance + 1 reject
     expect(c.families).toBe(2);
-    expect(c.family_features).toBe(10); // 3 for opencode+qwen, 7 for claude-code+opus (M11: integrate moved to grok+grok-build; claude-code+opus = lane:api/role:analyst/role:reviewer/capability:plan/lane:dev/role:designer + lane:intake for the v8 standing designer's brief hand-off)
+    expect(c.family_features).toBe(12); // 4 for opencode+qwen, 8 for claude-code+opus — each also staffed on project:ainarres (v9 Slice A, derived from its lane grants); (M11: integrate moved to grok+grok-build; claude-code+opus = lane:api/role:analyst/role:reviewer/capability:plan/lane:dev/role:designer + lane:intake for the v8 standing designer's brief hand-off)
   });
 
   it("the dev-loop workflow has exactly one initial and one terminal stage", () => {
@@ -66,10 +66,11 @@ describe("seed fixture", () => {
     expect(orphans).toEqual([]);
   });
 
-  it("roster: cheap API implementers hold exactly [lane:dev, role:implementer]", () => {
+  it("roster: cheap API implementers hold exactly [lane:dev, project:ainarres, role:implementer]", () => {
     // Free/rate-limited API models added to the swarm via opencode. Each holds
     // lane:dev + role:implementer only — NOT a frontier tier — so v3 escalation routes
-    // tasks they can't finish to a frontier family (ADR 0019).
+    // tasks they can't finish to a frontier family (ADR 0019). project:ainarres is the v9
+    // staffing feature (D1), derived from lane:dev until Slice C.
     const families = ["opencode+big-pickle", "opencode+nemotron-3-ultra", "opencode+nemotron-3-super"];
     for (const key of families) {
       const safe = key.replace(/'/g, "''");
@@ -80,7 +81,7 @@ describe("seed fixture", () => {
         join app.features ft on ft.id = ff.feature_id
         where f.key = '${safe}' order by ft.name
       `).map((r) => r.name);
-      expect(feats, key).toEqual(["lane:dev", "role:implementer"]);
+      expect(feats, key).toEqual(["lane:dev", "project:ainarres", "role:implementer"]);
     }
   });
 

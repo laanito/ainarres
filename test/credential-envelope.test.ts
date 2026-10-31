@@ -97,7 +97,7 @@ describe("the envelope decides what may be in a token", () => {
     expect(body.event.role).toBe("agent");
     // There is no parameter to request features with. This is the seed's grant, verbatim.
     expect(body.event.features).toEqual([
-      "lane:dev", "lane:intake", "role:designer", "role:intaker", "role:operator",
+      "lane:dev", "lane:intake", "project:ainarres", "role:designer", "role:intaker", "role:operator",
     ]);
     expect(body.event.features).not.toContain("capability:integrate");
     expect(body.event.features).not.toContain("role:auditor");
