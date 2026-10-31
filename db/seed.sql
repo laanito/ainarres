@@ -553,4 +553,23 @@ update app.stages set escalate_after = 2
 where key = 'implementing'
   and workflow_id = (select id from app.workflows where key = 'ainarres-dev');
 
+-- ── v9 Slice A: project-scoped staffing (design/customer-seat.md D1) ─────────
+-- A family is staffed on a PROJECT (`project:<slug>`), not seated in a lane. Derived, not
+-- listed: every family seated in a lane is staffed on that lane's project, so the grants
+-- above stay the single source and this block cannot drift from them. TRANSITIONAL — the
+-- lane:* grants it derives from are removed in v9 Slice C, and the grants above then name
+-- project:<slug> directly. Last, so it sees every lane grant made earlier in this file.
+insert into app.features (kind, key)
+select 'project', p.slug from app.projects p
+on conflict (kind, key) do nothing;
+
+insert into app.family_features (family_id, feature_id)
+select distinct ff.family_id, pf.id
+from app.family_features ff
+join app.features lf  on lf.id = ff.feature_id and lf.kind = 'lane'
+join app.lanes    l   on l.key = lf.key
+join app.projects p   on p.id = l.project_id
+join app.features pf  on pf.kind = 'project' and pf.key = p.slug
+on conflict (family_id, feature_id) do nothing;
+
 commit;

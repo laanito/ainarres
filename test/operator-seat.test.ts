@@ -46,13 +46,15 @@ describe("the seat is a registered family with a bounded feature set", () => {
     expect(rows.map((r) => r.key)).toEqual([SEAT]);
   });
 
-  it("holds exactly the five features the operator job needs", () => {
+  it("holds exactly the six features the operator job needs", () => {
     // lane:intake + role:intaker → work the intake middle without impersonating the
     // channel's human caller. lane:dev + role:designer → the M24 D4 create-gate's
     // minimum for creating dev work. role:operator → the seat marker (ledger writes).
+    // project:ainarres → v9 staffing (D1), derived from the lane grants until Slice C.
     expect(familyTokenFeatures(SEAT)).toEqual([
       "lane:dev",
       "lane:intake",
+      "project:ainarres",
       "role:designer",
       "role:intaker",
       "role:operator",

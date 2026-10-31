@@ -50,6 +50,17 @@ Slice B is a **named slice, not a TODO**. Two accepted truths is the failure mod
 avoided everywhere else (`db/schema.sql`, the demand gate's two readers); leaving the OR in "for
 safety" would install it deliberately.
 
+**Amended at build (Slice A).** There are **four** membership sites, not six: `api.create_task`,
+`api.claim_next_task`, `api.unblock_task` and the `api.demand` view. `app.do_transition` gates on
+the holder and the transition's own `required_features`, never on lane. All four now ask one
+helper, `app.staffed_on(eff, lane)`, and the transitional OR lives **only** there — so the
+removal (the slicing table's **Slice C**; "Slice B" above is the table's skills sweep) edits one
+function. `api.demand` cannot carry an OR — a bundle is a conjunction — so it reports
+`project:<slug>`, and the loop tiers carry both features until C. Grants are *derived*: every
+family seated in a lane is granted that lane's project, in the migration and at the end of
+`db/seed.sql`. That widening is the point of D1, and its one real edge is `unblock_task`, the only
+verb gated by membership alone.
+
 **Not changed:** `api.claim_next_task(lane_key text default null)`. The argument stays and stays
 optional — it is now a *filter* ("work this epic"), not a *gate*. What changes is that the loop
 stops passing it: `LOOP_LANES` becomes `LOOP_PROJECT`, and `claim --lane dev` drops out of the three

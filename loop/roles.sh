@@ -43,6 +43,9 @@ LOOP_LANE="dev"
 # adding one here is what makes work on it wake the runtime at all. Always set (never
 # unset) so `"${LOOP_LANES[@]}"` is safe under `set -u` on bash 3.2.
 LOOP_LANES=(dev)
+# v9 (design/customer-seat.md D1): the project every tier is STAFFED ON. Membership is
+# `project:<slug>` now; lanes become epics. role_features adds it to every non-empty grant.
+LOOP_PROJECT="${LOOP_PROJECT:-ainarres}"
 LOOP_MODE="${LOOP_MODE:-real}"           # real | mock
 RUN_DIR="${RUN_DIR:-$REPO/loop/run}"     # per-tier sweep logs (gitignored)
 
@@ -109,7 +112,16 @@ LOOP_HUMAN_FEATURES=(role:intaker role:auditor)
 # Token features per poller. The substrate trusts the signed token's features
 # (minus denials) — ADR 0007 — so this is the authoritative capability grant for
 # the run. In mock mode the frontier drops implementer/tier:2 (see header).
+# TRANSITIONAL (v9 Slice A): each grant carries BOTH project:$LOOP_PROJECT and its lane:*
+# features, so a token satisfies the substrate's transitional OR either way and every bundle
+# api.demand reports (which name the project). Slice C removes the lane:* half below.
 role_features() {
+  local feats
+  feats="$(role_features_base "$1")"
+  if [ -n "$feats" ]; then echo "project:$LOOP_PROJECT,$feats"; else echo ""; fi
+}
+
+role_features_base() {
   case "$1" in
     nano-implementer)     echo "lane:dev,role:implementer" ;;  # tier-0 (disabled): same role, cheapest model
     cheap-implementer)    echo "lane:dev,role:implementer" ;;
