@@ -63,14 +63,6 @@ const create = async (tok: string, lane: string) =>
 const claim = async (tok: string, lane?: string) =>
   json(await rpc("claim_next_task", { token: tok, body: lane ? { lane_key: lane } : {} }));
 
-// unblock_task does not register a caller it has never seen (claim and create do), so a
-// first-time unblocker is refused by the events.actor foreign key. Register it first with a
-// claim on a lane it is not staffed on — always `empty`, never takes anything.
-async function member(tok: string) {
-  expect((await claim(tok, L2)).code).toBe("empty");
-  return tok;
-}
-
 // Tasks this run left claimable get in the way of the next claim; finish what we claim.
 async function finish(tok: string, id: string) {
   const r = await json(await rpc("advance_task", { token: tok, body: { task_id: id, to_stage: "done" } }));
@@ -101,8 +93,9 @@ describe("staffed on a project (project:<slug>, no lane: feature)", () => {
     await claim(staffedP1(holder));
     const blocked = await json(await rpc("block_task", { token: staffedP1(holder), body: { task_id: made.task.id, reason: "waiting" } }));
     expect(blocked.ok, JSON.stringify(blocked)).toBe(true);
-    // A DIFFERENT member of the project unblocks it.
-    const un = await json(await rpc("unblock_task", { token: await member(staffedP1()), body: { task_id: made.task.id } }));
+    // A DIFFERENT member of the project unblocks it — one that has never acted before, which
+    // unblock_task must register itself (it used to hit the events.actor foreign key).
+    const un = await json(await rpc("unblock_task", { token: staffedP1(), body: { task_id: made.task.id } }));
     expect(un.ok, JSON.stringify(un)).toBe(true);
     expect(un.task.blocked).toBe(false);
     const sub = randomUUID();
@@ -139,14 +132,29 @@ describe("staffed on ANOTHER project", () => {
 
     await claim(staffedP1(holder));
     await json(await rpc("block_task", { token: staffedP1(holder), body: { task_id: made.task.id, reason: "x" } }));
-    const outsider = randomUUID();
-    expect((await claim(staffedP2(outsider), L1)).code).toBe("empty"); // registers it; takes nothing
-    const un = await json(await rpc("unblock_task", { token: staffedP2(outsider), body: { task_id: made.task.id } }));
+    const un = await json(await rpc("unblock_task", { token: staffedP2(), body: { task_id: made.task.id } }));
     expect(un.ok).toBe(false);
     expect(un.code).toBe("not_eligible");
 
     // Tidy: unblock and finish it as a member, so it is not left claimable.
-    await json(await rpc("unblock_task", { token: await member(staffedP1()), body: { task_id: made.task.id } }));
+    await json(await rpc("unblock_task", { token: staffedP1(), body: { task_id: made.task.id } }));
+    const sub = randomUUID();
+    await claim(staffedP1(sub), L1);
+    await finish(staffedP1(sub), made.task.id);
+  });
+
+  it("an unregistered family cannot unblock, however it is staffed (ADR 0007)", async () => {
+    const holder = randomUUID();
+    const made = await create(staffedP1(holder), L1);
+    await claim(staffedP1(holder));
+    await json(await rpc("block_task", { token: staffedP1(holder), body: { task_id: made.task.id, reason: "x" } }));
+    const stranger = mintToken(`pm-never-seated-${RUN}`, "agent", { features: [`project:${P1}`, ROLE] });
+    const un = await json(await rpc("unblock_task", { token: stranger, body: { task_id: made.task.id } }));
+    expect(un.ok).toBe(false);
+    expect(un.code).toBe("not_eligible");
+    expect(un.reason).toBe("unknown family");
+    // Tidy, as a member.
+    await json(await rpc("unblock_task", { token: staffedP1(), body: { task_id: made.task.id } }));
     const sub = randomUUID();
     await claim(staffedP1(sub), L1);
     await finish(staffedP1(sub), made.task.id);
